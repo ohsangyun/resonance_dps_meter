@@ -1,0 +1,924 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레조넌스 딜 미터</title>
+<link rel="icon" type="image/png" href="/icon.png">
+<style>
+:root { color-scheme:dark; --bg:#14171c; --panel:#1b1f26; --row:#232831; --line:#2e343f; --ink:#eef1f5; --ink2:#aab3c0; --ink3:#7c8696; --bar:#5b9df0; --good:#3dbb9a; --bad:#f2837a; --warn:#fab219; }
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--ink); overflow:hidden; }
+body { font:13px/1.35 "Malgun Gothic","Segoe UI",sans-serif; display:flex; flex-direction:column; }
+button { font:inherit; color:var(--ink2); background:none; border:0; padding:3px 8px; border-radius:4px; cursor:pointer; white-space:nowrap; }
+button:hover { color:var(--ink); background:var(--row); }
+button:focus-visible, select:focus-visible { outline:2px solid var(--bar); outline-offset:1px; }
+button.on { color:var(--ink); background:var(--line); }
+nav button.on, .seg button.on, button.chip.on { font-weight:600; box-shadow:inset 0 -2px 0 var(--bar); }
+header { padding:9px 11px 8px; background:var(--panel); border-bottom:1px solid var(--line); }
+.top { display:flex; align-items:center; gap:7px; }
+#status { font-size:12px; color:var(--ink2); flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#server, .srv { flex:none; padding:1px 6px; border:1px solid var(--line, #8884); border-radius:999px; font-size:11px; color:var(--ink2); white-space:nowrap; }
+#status.live::before { content:"●"; color:var(--good); margin-right:5px; }
+#pinBox { display:inline-flex; flex:none; align-items:center; gap:4px; color:var(--ink2); font-size:12px; cursor:pointer; user-select:none; }
+#pinBox:hover { color:var(--ink); }
+#pin { width:14px; height:14px; margin:0; accent-color:var(--bar); cursor:pointer; }
+#pin:focus-visible { outline:2px solid var(--bar); outline-offset:1px; }
+.arm { display:flex; flex:none; gap:3px; margin-right:auto; }
+.arm button { padding:1px 7px; background:var(--row); border:1px solid var(--line); font-size:12px; }
+.arm button:disabled { cursor:default; }
+.arm button:disabled:not(.on) { opacity:.45; background:var(--row); color:var(--ink2); }
+.arm button.on, .arm button.on:hover { border-color:var(--good); background:var(--row); color:var(--good); font-weight:600; }
+#logo { flex:none; width:20px; height:20px; }
+#home { flex:none; padding:1px 6px; font-size:12px; }
+.home .hero, .home #spark, .home nav, .home #crumb, .home #home { display:none; }
+.items { display:flex; flex-direction:column; gap:4px; }
+/* 한 줄 = 카드(.entry) 안에 열기 버튼(.item)과 삭제 버튼(.del)이 나란히 들어간다 */
+.entry { display:flex; align-items:center; min-width:0; background:linear-gradient(180deg,#2a313c,#1e232b); border:1px solid #3d4655; border-radius:6px; box-shadow:inset 0 1px 0 rgba(255,255,255,.08),inset 0 0 0 1px rgba(0,0,0,.28),0 1px 2px rgba(0,0,0,.4); transition:border-color .12s, background .12s; }
+.entry:hover { background:linear-gradient(180deg,#323a47,#232933); border-color:var(--bar); }
+.entry.live { border-color:var(--good); }
+.entry:has(.del:hover), .entry:has(.del:focus-visible) { border-color:rgba(242,131,122,.6); }
+button.item { display:flex; flex:1 1 auto; align-items:center; gap:9px; min-width:0; padding:4px 8px; color:var(--ink); text-align:left; white-space:normal; background:none; border-radius:5px; }
+button.item:hover { background:none; }
+.entry:has(.del) button.item { padding-right:6px; }
+button.del { display:grid; place-items:center; flex:none; width:28px; height:28px; margin-right:5px; padding:0; color:var(--ink3); background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.07); border-radius:5px; opacity:.55; transition:opacity .12s, color .12s, background .12s, border-color .12s; }
+button.del svg { width:15px; height:15px; }
+.entry:hover button.del, button.del:focus-visible { opacity:1; }
+button.del:hover, button.del:focus-visible { color:#ff9b92; background:rgba(242,131,122,.14); border-color:rgba(242,131,122,.5); }
+button.del:active { background:rgba(242,131,122,.24); }
+.when { flex:none; width:106px; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; }
+.badge { display:inline-block; padding:0 5px; border:1px solid var(--good); border-radius:3px; color:var(--good); font-size:11px; font-weight:600; line-height:15px; }
+.slots { display:flex; flex:0 1 auto; gap:3px; min-width:0; overflow:hidden; }
+.slot { position:relative; flex:none; width:30px; height:30px; overflow:hidden; background:#12151a; border:1px solid #39414e; border-radius:4px; box-shadow:inset 0 0 5px rgba(0,0,0,.7); }
+.slot img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:50% 0; transform:scale(1.55); transform-origin:50% 14%; }
+.slot .fb { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--ink2); font-size:11px; }
+.slot.lead { border-color:var(--warn); }
+.slot .crown { position:absolute; top:-1px; right:1px; color:var(--warn); font-size:10px; line-height:12px; text-shadow:0 0 2px #000,0 0 2px #000; }
+.foot { display:flex; flex:none; align-items:baseline; gap:7px; margin-left:auto; color:var(--ink2); font-size:11.5px; font-variant-numeric:tabular-nums; }
+.foot b { color:var(--ink); font-size:13px; font-weight:600; }
+.foot span { min-width:28px; text-align:right; }
+.hero { display:flex; align-items:baseline; gap:12px; margin-top:6px; font-variant-numeric:tabular-nums; }
+#total { font-size:27px; font-weight:700; letter-spacing:-.5px; }
+.stat { color:var(--ink2); font-size:12px; }
+.stat b { color:var(--ink); font-weight:600; }
+#spark { display:flex; align-items:flex-end; gap:1px; height:34px; margin-top:7px; }
+#spark i { flex:1; min-width:1px; background:var(--bar); opacity:.85; border-radius:1px 1px 0 0; }
+nav { display:flex; gap:1px; padding:5px 7px 0; }
+#crumb { display:none; align-items:center; gap:4px; padding:3px 11px; font-size:12px; color:var(--ink2); }
+main { flex:1; min-height:0; overflow:hidden scroll; scrollbar-width:thin; scrollbar-color:#7a8598 #2b313b; padding:5px 3px 8px 7px; }
+.row { position:relative; display:flex; align-items:center; gap:7px; width:100%; min-height:26px; margin-bottom:2px; padding:3px 8px; background:var(--row); border-radius:4px; overflow:hidden; color:var(--ink); text-align:left; font-size:12.5px; cursor:default; }
+.row.click { cursor:pointer; }
+.row.click:hover { outline:1px solid var(--ink3); }
+.row.click:focus-visible { outline:2px solid var(--bar); }
+.fill { position:absolute; inset:0 auto 0 0; background:var(--bar); opacity:.42; border-radius:4px; }
+.row > span:not(.fill) { position:relative; }
+.rank { color:var(--ink3); width:15px; font-size:11px; flex:none; }
+.name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.val { font-weight:600; font-variant-numeric:tabular-nums; flex:none; }
+.dps, .pct { color:var(--ink2); text-align:right; font-variant-numeric:tabular-nums; flex:none; font-size:11.5px; }
+.dps { width:66px; } .pct { width:44px; }
+.detail { color:var(--ink3); font-size:11px; padding:0 8px 4px 30px; font-variant-numeric:tabular-nums; }
+.log { display:grid; grid-template-columns:46px minmax(0,1fr) auto; gap:8px; padding:3px 6px; border-bottom:1px solid var(--row); font-size:12px; font-variant-numeric:tabular-nums; }
+.log .t { color:var(--ink3); } .log .v { font-weight:600; }
+.empty { color:var(--ink3); text-align:center; padding:34px 14px; line-height:1.6; }
+.note { color:var(--ink3); font-size:11px; padding:5px 4px; }
+#err { display:none; padding:6px 11px; color:var(--warn); font-size:12px; }
+.tools { display:flex; align-items:center; flex-wrap:wrap; gap:4px; min-height:24px; margin-bottom:4px; }
+.tools .end { margin-left:auto; }
+.seg { display:inline-flex; gap:1px; }
+.chips { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:5px; }
+button.chip { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; padding:2px 8px; background:var(--row); font-size:12px; }
+button.chip.on { background:var(--line); }
+.hand { display:inline-flex; align-items:baseline; gap:5px; max-width:100%; min-width:0; padding:2px 7px; background:var(--row); border-radius:4px; font-size:12px; }
+.hand span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hand b { flex:none; font-weight:600; font-variant-numeric:tabular-nums; }
+.tiles { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:3px; margin-bottom:3px; }
+.tile { min-width:0; padding:4px 8px 5px; background:var(--row); border-radius:4px; }
+.kv { display:flex; align-items:baseline; justify-content:space-between; gap:6px; }
+.kv .k { flex:none; color:var(--ink2); font-size:11.5px; }
+.kv .v { min-width:0; overflow:hidden; text-overflow:ellipsis; font-size:15px; font-weight:600; white-space:nowrap; }
+.tile .s { overflow:hidden; color:var(--ink2); font-size:11px; text-align:right; text-overflow:ellipsis; white-space:nowrap; }
+.chart { margin-bottom:3px; padding:4px 8px 3px; background:var(--row); border-radius:4px; }
+.ct { color:var(--ink2); font-size:11.5px; margin-bottom:2px; }
+.ca { display:grid; grid-template-columns:auto minmax(0,1fr); column-gap:6px; }
+.cy { display:flex; flex-direction:column; justify-content:space-between; align-items:flex-end; min-width:14px; color:var(--ink2); font-size:10.5px; line-height:12px; font-variant-numeric:tabular-nums; }
+.plot { position:relative; height:60px; }
+.plot.ready { cursor:crosshair; }
+.plot svg { position:absolute; inset:0; display:block; width:100%; height:100%; }
+.grid { fill:none; stroke:var(--line); stroke-width:1; vector-effect:non-scaling-stroke; }
+.ln { fill:none; stroke:var(--bar); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+.cx { grid-column:2; color:var(--ink2); font-size:10.5px; line-height:13px; text-align:right; font-variant-numeric:tabular-nums; }
+.wait { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--ink3); font-size:11px; }
+.cross { display:none; position:absolute; top:0; bottom:0; width:1px; background:var(--ink2); pointer-events:none; }
+.tip { display:none; position:absolute; top:1px; padding:1px 6px; background:var(--panel); border:1px solid var(--line); border-radius:3px; color:var(--ink2); font-size:11px; white-space:nowrap; font-variant-numeric:tabular-nums; pointer-events:none; }
+.tip b { color:var(--ink); font-weight:600; margin-right:5px; }
+.plot.on .cross, .plot.on .tip { display:block; }
+.sec { color:var(--ink2); font-size:11.5px; margin:7px 2px 3px; }
+.rec { display:grid; grid-template-columns:44px minmax(0,1fr) auto; column-gap:6px; padding:3px 6px; border-bottom:1px solid var(--row); font-size:12px; }
+.rec .t, .ev .t { color:var(--ink3); font-variant-numeric:tabular-nums; }
+.nm { display:flex; align-items:baseline; gap:4px; min-width:0; }
+.nm .txt { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tag { flex:none; padding:0 3px; border:1px solid var(--line); border-radius:3px; color:var(--ink2); font-size:10.5px; line-height:13px; }
+.rec .who { max-width:110px; overflow:hidden; color:var(--ink2); font-size:11.5px; text-overflow:ellipsis; white-space:nowrap; }
+.rec .sub { grid-column:2 / -1; color:var(--ink3); font-size:11px; font-variant-numeric:tabular-nums; }
+.buff { display:grid; grid-template-columns:13px minmax(0,1fr) auto 44px; column-gap:6px; align-items:baseline; padding:3px 8px; margin-bottom:2px; background:var(--row); border-radius:4px; font-size:12.5px; }
+.buff .g { font-size:11px; }
+.g.up { color:var(--good); } .g.down { color:var(--bad); } .g.etc { color:var(--ink3); }
+.buff .lb { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.buff .st { font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.buff .up-t { color:var(--ink2); font-size:11.5px; text-align:right; font-variant-numeric:tabular-nums; }
+.buff .sub { grid-column:2 / -1; overflow:hidden; color:var(--ink2); font-size:11px; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.buff.off .lb, .buff.off .st { color:var(--ink2); font-weight:400; }
+.ev { display:grid; grid-template-columns:44px minmax(0,1fr) auto 44px; column-gap:6px; padding:3px 6px; border-bottom:1px solid var(--row); font-size:12px; font-variant-numeric:tabular-nums; }
+.ev .lb { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ev .chg { font-weight:600; white-space:nowrap; }
+.ev .left { color:var(--ink2); text-align:right; white-space:nowrap; }
+.code { display:block; width:100%; height:66px; margin:0; padding:5px 7px; resize:none; background:var(--row); border:1px solid var(--line); border-radius:4px; color:var(--ink); font:11px/1.35 Consolas,monospace; word-break:break-all; scrollbar-width:thin; scrollbar-color:#7a8598 #2b313b; }
+.code:focus-visible { outline:2px solid var(--bar); outline-offset:-1px; }
+.codebar { display:flex; align-items:center; gap:6px; margin:3px 0 0; min-height:24px; }
+.codebar button { flex:none; background:var(--row); border:1px solid var(--line); font-size:12px; padding:1px 10px; }
+.codebar span { min-width:0; color:var(--ink2); font-size:11px; }
+.member { padding:5px 8px 6px; margin-bottom:3px; background:var(--row); border-radius:4px; }
+.mhead { display:flex; align-items:center; gap:8px; }
+.mhead .mname { flex:1; min-width:0; overflow:hidden; font-size:13px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.mhead .mlv { flex:none; color:var(--ink2); font-size:12px; font-variant-numeric:tabular-nums; }
+.equips { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; margin-top:5px; }
+.eq { display:flex; align-items:center; gap:5px; min-width:0; padding:2px 4px 2px 2px; background:var(--panel); border-radius:3px; }
+.eq.off { color:var(--ink3); }
+.eicon { position:relative; flex:none; width:28px; height:28px; overflow:hidden; background:#12151a; border:1px solid #39414e; border-radius:3px; }
+.eq.off .eicon { border-style:dashed; }
+.eicon img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+.etext { min-width:0; line-height:1.2; }
+.ename { overflow:hidden; font-size:11.5px; text-overflow:ellipsis; white-space:nowrap; }
+.elv { color:var(--ink2); font-size:11px; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body class="home">
+<header>
+  <div class="top">
+    <button id="home" aria-label="기록 목록으로">← 목록</button>
+    <img id="logo" src="/icon.png" alt="">
+    <div class="arm">
+      <button id="armOn" title="켜 두는 동안 시작되는 전투를 기록합니다">측정 대기</button>
+      <button id="armOff" title="새 전투를 기록하지 않습니다. 기록 중인 전투는 끝까지 기록합니다">대기 중단</button>
+    </div>
+    <span id="server" title="지금 붙은 게임의 서버" hidden></span>
+    <span id="status">연결 중</span>
+    <label id="pinBox" title="다른 창 위에 항상 표시"><input id="pin" type="checkbox" checked>고정</label>
+  </div>
+  <div class="hero">
+    <span id="total">0</span>
+    <span class="stat">DPS <b id="dps">0</b></span>
+    <span class="stat"><b id="time">0:00</b></span>
+  </div>
+  <div id="spark" aria-label="초당 피해"></div>
+</header>
+<div id="err"></div>
+<nav id="tabs"></nav>
+<div id="crumb"><button id="back" aria-label="캐릭터 목록으로">← 전체</button><span id="crumbName"></span></div>
+<main id="list"></main>
+<script>
+const TABS = [["roles", "캐릭터"], ["skills", "스킬"], ["cost", "비용·손패"], ["buffs", "버프"], ["lineup", "편성"], ["log", "로그"]];
+const NO_RECORD = "이 전투에는 기록이 없습니다";
+const OFF_CARD = { name: "카드 외 피해", detail: "패시브·발동 효과 등 카드에 묶이지 않은 피해" };
+const KINDS = { buff: ["▲", "버프", "up"], debuff: ["▼", "디버프", "down"] };
+const KIND_OTHER = ["●", "기타", "etc"];
+const POLL_MS = 250;
+const HOME_POLL_MS = 1000;
+const LOST_AFTER = 4;
+const COPY_RESET_MS = 1500;
+const CODE_MISSING = { "registry-unreadable": "자동 사용 설정을 읽지 못했습니다.", none: "이 편성의 자동 사용 설정을 찾지 못했습니다." };
+const PARTY_SLOTS = 5;
+
+const $ = id => document.getElementById(id);
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
+const svgEl = (t, attrs) => { const n = document.createElementNS("http://www.w3.org/2000/svg", t); Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v)); return n; };
+// 구버전 전투처럼 필드가 비어 있어도 화면이 깨지지 않게 하는 도우미
+const arr = v => Array.isArray(v) ? v : [];
+const obj = v => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+const objs = v => arr(v).filter(x => x && typeof x === "object" && !Array.isArray(x));
+const n0 = v => Number.isFinite(v) ? v : 0;
+const num = raw => {
+  const v = n0(raw);
+  const a = Math.abs(v);
+  if (a >= 1e8) return (v / 1e8).toFixed(2) + "억";
+  if (a >= 1e4) return (v / 1e4).toFixed(a >= 1e6 ? 0 : 1) + "만";
+  return Math.round(v).toLocaleString();
+};
+// 비용처럼 작은 수: 값이 없으면 "-", 소수 끝의 0 은 뗀다
+const amount = (v, digits = 2) => Number.isFinite(v) ? String(+v.toFixed(digits)) : "-";
+const count = (v, unit = "") => Number.isFinite(v) ? v.toLocaleString() + unit : "-";
+const clock = raw => { const s = n0(raw); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
+const clockTenth = t => {
+  if (!Number.isFinite(t)) return "-";
+  const tenths = Math.round(t * 10), minutes = Math.floor(tenths / 600);
+  return `${minutes}:${((tenths - minutes * 600) / 10).toFixed(1).padStart(4, "0")}`;
+};
+const store = { get: (k, d) => { try { return localStorage.getItem("dps." + k) || d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem("dps." + k, v); } catch {} } };
+
+let tab = store.get("tab", "roles");
+if (!TABS.some(([v]) => v === tab)) tab = "roles";
+let screen = "list", picked = "", listScroll = null, lastFetch = -1e9;
+let data = null, seq = 0, busy = false, fails = 0;
+let roleFocus = "", lastKey = "", drawError = "", hover = null, pressedAt = -1e9, lineupDrawn = "";
+let groupSame = store.get("group", "0") === "1";
+let buffUnit = store.get("buffUnit", "");
+let buffView = store.get("buffView", "now") === "events" ? "events" : "now";
+let showInternal = store.get("internal", "0") === "1";
+
+const tabButtons = TABS.map(([v, label]) => {
+  const b = el("button", "", label);
+  b.onclick = () => { tab = v; store.set("tab", v); syncTabs(); $("list").scrollTop = 0; paint(true); };
+  return b;
+});
+$("tabs").replaceChildren(...tabButtons);
+
+function syncTabs() {
+  tabButtons.forEach((b, i) => {
+    const on = TABS[i][0] === tab;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function bar(rank, name, value, max, total, secs, detail) {
+  const wrap = document.createDocumentFragment();
+  const row = el("div", "row");
+  const fill = el("span", "fill");
+  fill.style.width = (max ? value / max * 100 : 0) + "%";
+  const label = el("span", "name", name);
+  label.title = name ?? "";
+  row.append(fill, el("span", "rank", rank), label, el("span", "val", num(value)),
+    el("span", "dps", secs > 0 ? num(value / secs) + "/s" : ""), el("span", "pct", total ? (value / total * 100).toFixed(1) + "%" : ""));
+  wrap.append(row);
+  if (detail) wrap.append(el("div", "detail", detail));
+  return wrap;
+}
+
+const barRows = (items, total, secs) => {
+  const sorted = [...items].sort((x, y) => y.value - x.value);
+  const max = sorted.length ? sorted[0].value : 0;
+  return sorted.map((it, i) => bar(i + 1, it.name, it.value, max, total, secs, it.detail));
+};
+
+function toggle(fk, label, on, action, cls) {
+  const b = el("button", (on ? "on" : "") + (cls ? " " + cls : ""), (on ? "✓ " : "") + label);
+  b.dataset.fk = fk;
+  b.setAttribute("aria-pressed", on ? "true" : "false");
+  b.onclick = action;
+  return b;
+}
+
+const dateText = sec => {
+  const d = new Date(n0(sec) * 1000);
+  const two = v => String(v).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+};
+
+// 조합의 캐릭터 한 칸. 초상화가 없으면 이름 앞 글자를 보여 준다.
+function partySlot(member) {
+  const slot = el("span", "slot" + (member && member.leader ? " lead" : ""));
+  if (!member) return slot;
+  slot.append(el("span", "fb", String(member.name ?? "").slice(0, 2)));
+  if (/^\d+$/.test(String(member.id))) {
+    const img = el("img");
+    img.alt = "";
+    img.onerror = () => img.remove();
+    img.src = `/unit/${member.id}.webp`;
+    slot.append(img);
+  }
+  if (member.leader) slot.append(el("span", "crown", "★"));
+  return slot;
+}
+
+const TRASH_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M6.5 4.5V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.5M4 4.5l.7 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.6M6.8 7v4.5M9.2 7v4.5"/></svg>';
+
+function itemBox(b) {
+  const party = objs(b.party);
+  const names = party.map(m => `${m.name ?? ""}${m.leader ? "(리더)" : ""}`).join(", ");
+  const box = el("button", "item");
+  box.dataset.fk = "battle:" + b.id;
+  box.title = names;
+  box.setAttribute("aria-label", `${b.live ? "진행 중인 전투" : dateText(b.started) + " 기록"}, 조합 ${names || "정보 없음"}, 총 피해 ${num(b.total)}`);
+  const when = el("div", "when");
+  when.append(b.live ? el("span", "badge", "전투 중") : el("span", "", dateText(b.started)));
+  if (b.server) when.append(el("span", "srv", (data.servers || {})[b.server] || String(b.server))); // 서버 표시 (기록의 server — 여러 서버의 기록을 한 폴더에 모아도 가릴 수 있게)
+  const slots = el("div", "slots");
+  for (let i = 0; i < Math.max(PARTY_SLOTS, party.length); i += 1) slots.append(partySlot(party[i]));
+  const foot = el("div", "foot");
+  foot.append(el("b", "", num(b.total)), el("span", "", n0(b.seconds) ? clock(b.seconds) : "-"));
+  box.append(when, slots, foot);
+  box.onclick = () => openBattle(b.id);
+  const entry = el("div", "entry" + (b.live ? " live" : ""));
+  entry.append(box);
+  if (!b.live) {
+    const del = el("button", "del");
+    del.innerHTML = TRASH_ICON;
+    del.dataset.fk = "del:" + b.id;
+    del.title = "이 기록 삭제";
+    del.setAttribute("aria-label", `${dateText(b.started)} 기록 삭제`);
+    del.onclick = () => deleteBattle(b);
+    entry.append(del);
+  }
+  return entry;
+}
+
+async function deleteBattle(b) {
+  if (!confirm(`${dateText(b.started)} 기록을 삭제할까요?\n기록 파일도 함께 지워지고 되돌릴 수 없습니다.`)) return;
+  let ok = false;
+  try {
+    const res = await fetch("/api/delete?battle=" + encodeURIComponent(b.id), { method: "POST" });
+    ok = res.ok && (await res.json()).ok;
+  } catch {}
+  if (!ok) alert("삭제하지 못했습니다.\n진행 중인 전투이거나, 미터가 예전 버전으로 켜져 있습니다. 미터를 완전히 껐다 켜 주세요.");
+  refresh(true);
+}
+
+function renderHome(force) {
+  const list = objs(data.battles);
+  const key = "home:" + list.map(b => [b.id, b.live ? 1 : 0, Math.round(n0(b.total)), Math.floor(n0(b.seconds)), objs(b.party).length].join(",")).join("|");
+  if (!force && (key === lastKey || pressing())) return;
+  lastKey = key;
+  if (list.length) {
+    const grid = el("div", "items");
+    grid.append(...list.map(itemBox));
+    swap([grid]);
+  } else {
+    swap([el("div", "empty", "아직 기록이 없습니다. 측정 대기가 켜져 있는 동안 전투를 시작하면 기록합니다.")]);
+  }
+  if (listScroll !== null) { $("list").scrollTop = listScroll; listScroll = null; }
+}
+
+function openBattle(id) {
+  listScroll = $("list").scrollTop;
+  screen = "detail";
+  picked = String(id);
+  roleFocus = "";
+  lastKey = "";
+  document.body.classList.remove("home");
+  $("total").textContent = "0"; $("dps").textContent = "0"; $("time").textContent = "0:00";
+  $("spark").replaceChildren();
+  $("list").scrollTop = 0;
+  swap([el("div", "empty", "불러오는 중입니다.")]);
+  refresh(true);
+}
+
+function closeBattle() {
+  screen = "list";
+  picked = "";
+  roleFocus = "";
+  lastKey = "";
+  document.body.classList.add("home");
+  refresh(true);
+}
+
+function renderSpark(timeline) {
+  const line = obj(timeline);
+  const keys = Object.keys(line).map(Number).filter(k => Number.isFinite(k) && k >= 0);
+  const last = keys.length ? Math.max(...keys) : 0;
+  const slots = Math.min(90, last + 1);
+  const bucket = Math.max(1, Math.ceil((last + 1) / slots));
+  const bins = new Array(Math.ceil((last + 1) / bucket)).fill(0);
+  keys.forEach(k => { bins[Math.floor(k / bucket)] += n0(line[k]); });
+  const peak = Math.max(...bins, 1);
+  $("spark").replaceChildren(...bins.map((v, i) => {
+    const s = el("i");
+    s.style.height = (v ? Math.max(6, v / peak * 100) : 2) + "%";
+    s.title = `${clock(i * bucket)} · ${num(v / bucket)}/s`;
+    return s;
+  }));
+}
+
+// 시간 기준: 게임이 알려 준 소요 시간 > 게임 프레임 > 구버전 전투의 벽시계
+function secondsOf(b) {
+  if (b.game_duration) return b.game_duration;
+  if (b.frame) return b.frame / 60;
+  const end = b.live ? data.now : (b.last_hit || b.ended);
+  return b.first_hit ? Math.max(n0(end) - b.first_hit, 1) : 0;
+}
+
+const skillLine = s => {
+  const peak = s.maxCast > 0 ? `시전 최대 ${num(s.maxCast)}` : `최대 0.05초 ${num(s.maxUpdate)}`;
+  return `사용 ${n0(s.use)} · 판정 ${n0(s.findtimes)} · 사용당 ${s.use ? num(n0(s.dmg) / s.use) : "-"} · ${peak}`;
+};
+
+// 이름의 '·' 앞부분이 같은 카드를 한 행으로 합친다. 혼자인 카드는 원래 이름을 유지한다.
+function mergeByName(list) {
+  const groups = new Map();
+  list.forEach(s => {
+    const full = String(s.name ?? "");
+    const head = full.split("·")[0].trim() || full;
+    if (!groups.has(head)) groups.set(head, { name: head, full, members: 0, owner: s.owner, dmg: 0, use: 0, findtimes: 0, maxCast: 0, maxUpdate: 0 });
+    const g = groups.get(head);
+    g.members += 1;
+    g.dmg += n0(s.dmg);
+    g.use += n0(s.use);
+    g.findtimes += n0(s.findtimes);
+    g.maxCast = Math.max(g.maxCast, n0(s.maxCast));
+    g.maxUpdate = Math.max(g.maxUpdate, n0(s.maxUpdate));
+    if (g.owner !== s.owner) g.owner = "";
+  });
+  return [...groups.values()].map(g => g.members === 1 ? { ...g, name: g.full } : g);
+}
+
+function viewRoles({ b, roles, skills, total, secs, role }) {
+  if (role) {
+    const owners = obj(b.owners);
+    const mine = skills.filter(s => String(owners[String(s.id)]) === roleFocus);
+    const rest = Math.max(n0(role.damage) - mine.reduce((a, s) => a + n0(s.dmg), 0), 0);
+    const items = [...mine.map(s => ({ name: s.name, value: n0(s.dmg), detail: skillLine(s) })),
+      ...(rest ? [{ name: OFF_CARD.name, value: rest, detail: OFF_CARD.detail }] : [])];
+    return barRows(items, items.reduce((a, it) => a + it.value, 0), secs);
+  }
+  const max = roles.length ? n0(roles[0].damage) : 0;
+  return roles.map((r, i) => {
+    const part = bar(i + 1, r.name, n0(r.damage), max, total, secs, `치유 ${num(r.heal)} · 피격 ${num(r.getHit)}`);
+    const row = part.firstChild;
+    row.classList.add("click");
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    row.dataset.fk = "role:" + r.id;
+    const open = () => { roleFocus = String(r.id); $("list").scrollTop = 0; paint(true); };
+    row.onclick = open;
+    row.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
+    return part;
+  });
+}
+
+function viewSkills({ b, skills, total, secs }) {
+  const owners = obj(b.owners), roleMap = obj(b.roles);
+  const named = skills.map(s => {
+    const o = owners[String(s.id)];
+    return { ...s, owner: o && roleMap[o] ? roleMap[o].name : "" };
+  });
+  const list = groupSame ? mergeByName(named) : named;
+  const rest = Math.max(total - skills.reduce((a, s) => a + n0(s.dmg), 0), 0);
+  const items = [...list.map(s => ({ name: s.name, value: n0(s.dmg), detail: `${s.owner ? s.owner + " · " : ""}${skillLine(s)}` })),
+    ...(rest ? [{ name: OFF_CARD.name, value: rest, detail: OFF_CARD.detail }] : [])];
+  const tools = el("div", "tools");
+  tools.append(toggle("group", "같은 이름 묶기", groupSame, () => {
+    groupSame = !groupSame;
+    store.set("group", groupSame ? "1" : "0");
+    paint(true);
+  }));
+  return items.length ? [tools, ...barRows(items, total, secs)] : [tools, el("div", "empty", "기록된 스킬이 없습니다.")];
+}
+
+function tile(label, value, sub) {
+  const t = el("div", "tile");
+  const head = el("div", "kv");
+  head.append(el("span", "k", label), el("span", "v", value));
+  const s = el("div", "s", sub || " ");
+  if (sub) s.title = sub;
+  t.append(head, s);
+  return t;
+}
+
+const pointsOf = (series, col) => series.filter(r => Array.isArray(r) && Number.isFinite(r[0]) && Number.isFinite(r[col])).map(r => [r[0], r[col]]);
+
+// 시리즈 하나짜리 선 그래프. 그래프를 다시 만들어도 툴팁은 paintHover 가 이어서 그린다.
+function lineChart({ id, title, pts, top, step, axis, tip }) {
+  const box = el("div", "chart");
+  box.append(el("div", "ct", title));
+  const area = el("div", "ca");
+  const ticks = el("div", "cy");
+  ticks.append(el("span", "", axis(top)), el("span", "", "0"));
+  const plot = el("div", "plot");
+  area.append(ticks, plot);
+  box.append(area);
+  if (pts.length < 2) {
+    plot.append(el("div", "wait", "기록 대기 중"));
+    area.append(el("div", "cx", "0:00"));
+    return box;
+  }
+  const W = 1000, H = 100, INSET = 4;
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0], span = Math.max(t1 - t0, 0.001);
+  const X = t => ((t - t0) / span * W).toFixed(1);
+  const Y = v => (H - INSET - Math.max(0, Math.min(v / top, 1)) * (H - INSET * 2)).toFixed(1);
+  let grid = "";
+  for (let i = 0; i <= 4; i += 1) grid += `M0 ${Y(top * i / 4)}H${W}`;
+  const every = [5, 10, 15, 30, 60, 120, 300, 600].find(s => span / s <= 6) || Math.ceil(span / 6);
+  for (let s = Math.ceil(t0 / every) * every; s <= t1; s += every) grid += `M${X(s)} 0V${H}`;
+  let line = "";
+  pts.forEach(([t, v], i) => {
+    if (!i) line += `M${X(t)} ${Y(v)}`;
+    else line += step ? `H${X(t)}V${Y(v)}` : `L${X(t)} ${Y(v)}`;
+  });
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", "aria-hidden": "true" });
+  svg.append(svgEl("path", { class: "grid", d: grid }), svgEl("path", { class: "ln", d: line }));
+  plot.classList.add("ready");
+  plot.dataset.chart = id;
+  plot.setAttribute("role", "img");
+  plot.setAttribute("aria-label", `${title} 그래프, 마지막 값 ${tip(pts[pts.length - 1][1])}, 끝 시각 ${clock(t1)}`);
+  plot.chart = { pts, t0, span, tip };
+  plot.append(svg, el("i", "cross"), el("div", "tip"));
+  area.append(el("div", "cx", clock(t1)));
+  return box;
+}
+
+function paintHover() {
+  const host = $("list");
+  host.querySelectorAll(".plot.on").forEach(p => p.classList.remove("on"));
+  if (!hover) return;
+  const plot = host.querySelector(`.plot[data-chart="${hover.id}"]`);
+  if (!plot || !plot.chart) return;
+  const { pts, t0, span, tip } = plot.chart;
+  const box = plot.getBoundingClientRect();
+  const want = t0 + Math.max(0, Math.min((hover.x - box.left) / box.width, 1)) * span;
+  let best = pts[0];
+  pts.forEach(p => { if (Math.abs(p[0] - want) < Math.abs(best[0] - want)) best = p; });
+  const px = (best[0] - t0) / span * box.width;
+  plot.querySelector(".cross").style.left = px + "px";
+  const label = plot.querySelector(".tip");
+  label.replaceChildren(el("b", "", tip(best[1])), document.createTextNode(clock(best[0])));
+  const flip = px > box.width / 2;
+  label.style.left = flip ? "" : (px + 6) + "px";
+  label.style.right = flip ? (box.width - px + 6) + "px" : "";
+  plot.classList.add("on");
+}
+
+function cardRow(c) {
+  const row = el("div", "rec");
+  const name = el("span", "nm");
+  const text = el("span", "txt", c.name ?? String(c.id ?? "-"));
+  text.title = text.textContent;
+  name.append(text);
+  if (c.leader) name.append(el("span", "tag", "리더"));
+  if (c.auto) name.append(el("span", "tag", "자동"));
+  const who = el("span", "who", c.ownerName ?? "");
+  who.title = who.textContent;
+  const paid = Number.isFinite(c.paid) ? amount(c.paid) : "확인 중";
+  row.append(el("span", "t", clockTenth(c.t)), name, who,
+    el("span", "sub", `표시 ${amount(c.shown)} → 지불 ${paid} · 비용 ${amount(c.before, 1)} → ${amount(c.after, 1)}`));
+  return row;
+}
+
+function viewCost({ b }) {
+  const sum = obj(b.summary), ledger = obj(b.ledger), series = arr(b.series), cards = objs(b.cards);
+  const now = b.now && typeof b.now === "object" ? b.now : null;
+  if (!b.schemaVersion && !b.ledger && !now && !series.length && !cards.length) return [el("div", "empty", NO_RECORD)];
+  const hand = now ? arr(now.hand) : [];
+  const gains = [sum.natural, sum.start, sum.gained];
+  const gain = gains.some(Number.isFinite) ? gains.reduce((a, v) => a + n0(v), 0) : undefined;
+  const capShare = ledger.frames > 0 ? `${(n0(ledger.capFrames) / ledger.frames * 100).toFixed(1)}%` : "-";
+  const tiles = el("div", "tiles");
+  tiles.append(
+    tile("비용", now ? `${amount(now.cost, 1)} / ${amount(now.max, 1)}` : "-", now ? `초당 +${amount(now.regen)}` : ""),
+    tile("손패", now ? `${hand.length} / ${count(now.handMax)}` : "-", now ? `덱 ${count(now.deck)} · 버림 ${count(now.grave)} · 평균 ${amount(sum.avgHand, 1)}` : ""),
+    tile("사용 카드", count(sum.usedCards, "장"), `자동 ${count(sum.autoCards, "장")}`),
+    tile("막대 순감소", amount(sum.paidCost), Number.isFinite(sum.usedCostEstimate) ? `사용한 비용 약 ${amount(sum.usedCostEstimate, 0)}${sum.usedCostUnknownCards > 0 ? ` (미확인 ${count(sum.usedCostUnknownCards, "장")})` : ""}` : "같은 순간 환급분 제외"),
+    tile("획득 합계", amount(gain), `자연 ${amount(sum.natural, 1)} · 효과 ${amount(sum.gained, 1)} · 시작 ${amount(sum.start, 1)}`),
+    tile("상한 손실", amount(sum.overflow), `상한 유지 ${capShare}`),
+    tile("리더 충전", now && now.leaderMax ? `${count(now.leaderProgress)} / ${count(now.leaderMax)}` : "-", now && Number.isFinite(now.leaderPct) ? `${now.leaderPct}%` : ""),
+    tile("마지막 10초 피해", Number.isFinite(sum.last10s) ? num(sum.last10s) : "-", Number.isFinite(sum.maxCast) ? `시전 최대 ${num(sum.maxCast)}` : "")
+  );
+  const costPts = pointsOf(series, 1), handPts = pointsOf(series, 2);
+  const chips = el("div", "chips");
+  hand.forEach(item => {
+    const [name, price] = arr(item);
+    const chip = el("span", "hand");
+    const label = el("span", "", name ?? "");
+    label.title = label.textContent;
+    chip.append(label, el("b", "", amount(price, 1)));
+    chips.append(chip);
+  });
+  return [
+    tiles,
+    lineChart({ id: "cost", title: "비용", pts: costPts, top: Math.max(1, n0(now && now.max), ...costPts.map(p => p[1])), axis: v => amount(v, 1), tip: v => amount(v, 1) }),
+    lineChart({ id: "hand", title: "손패 수", pts: handPts, top: Math.max(1, n0(now && now.handMax), ...handPts.map(p => p[1])), step: true, axis: v => String(v), tip: v => `${v}장` }),
+    el("div", "sec", "현재 손패"),
+    hand.length ? chips : el("div", "note", "손패 정보가 없습니다."),
+    el("div", "sec", "카드 사용 기록"),
+    ...(cards.length ? [...cards].reverse().map(cardRow) : [el("div", "note", "기록된 카드 사용이 없습니다.")]),
+  ];
+}
+
+const leftText = left => Number.isFinite(left) ? `${(left / 60).toFixed(1)}초` : "∞";
+const unitName = u => {
+  const twin = String(u.key ?? "").match(/#(\d+)$/);
+  return `${u.name || String(u.key ?? "")}${twin ? " #" + twin[1] : ""}`;
+};
+const selectedUnit = units => units.find(u => String(u.key) === buffUnit) || units[0];
+
+function pickUnit(key) {
+  buffUnit = key;
+  store.set("buffUnit", key);
+  // 응답이 오기 전까지 이전 유닛의 변화 기록을 보여 주지 않는다
+  if (data && data.battle) data.battle.buffEvents = null;
+  $("list").scrollTop = 0;
+  paint(true);
+  refresh(true);
+}
+
+function buffRow(r, live) {
+  const [glyph, word, cls] = KINDS[r.kind] || KIND_OTHER;
+  const active = n0(r.stacks) > 0;
+  const row = el("div", "buff" + (live && !active ? " off" : ""));
+  const mark = el("span", "g " + cls, glyph);
+  mark.title = word;
+  const label = el("span", "lb", r.label ?? String(r.id ?? ""));
+  label.title = `${label.textContent} (id ${r.id ?? "-"})`;
+  const state = live ? `×${n0(r.stacks)}${active ? " · " + leftText(r.left) : ""}` : `최대 ×${n0(r.maxStacks)}`;
+  const sub = [`평균 ×${amount(n0(r.avgStacks), 1)}`, `부여 ${n0(r.applied)}회`, r.mod, arr(r.attrs).join(", ")].filter(Boolean).join(" · ");
+  const line = el("span", "sub", sub);
+  line.title = sub;
+  row.append(mark, label, el("span", "st", state), el("span", "up-t", `${amount(n0(r.uptime), 1)}%`), line);
+  return row;
+}
+
+function eventRow(item) {
+  const [t, label, before, after, left] = arr(item);
+  const row = el("div", "ev");
+  const name = el("span", "lb", label ?? "");
+  name.title = name.textContent;
+  row.append(el("span", "t", clockTenth(t)), name, el("span", "chg", `${n0(before)} → ${n0(after)}`),
+    el("span", "left", Number.isFinite(left) || n0(after) > 0 ? leftText(left) : "-"));
+  return row;
+}
+
+function viewBuffs({ b }) {
+  const units = objs(b.buffs);
+  if (!units.length) return [el("div", "empty", b.live && b.schemaVersion ? "버프 기록을 기다리는 중입니다." : NO_RECORD)];
+  const unit = selectedUnit(units);
+  const picker = el("div", "chips");
+  units.forEach(u => {
+    const key = String(u.key), on = u === unit;
+    const chip = el("button", "chip" + (on ? " on" : ""), unitName(u));
+    chip.title = chip.textContent;
+    chip.dataset.fk = "unit:" + key;
+    chip.setAttribute("aria-pressed", on ? "true" : "false");
+    chip.onclick = () => pickUnit(key);
+    picker.append(chip);
+  });
+  const setView = v => () => { buffView = v; store.set("buffView", v); $("list").scrollTop = 0; paint(true); };
+  const modes = el("div", "seg");
+  [["now", "현황"], ["events", "변화"]].forEach(([v, label]) => {
+    const btn = el("button", v === buffView ? "on" : "", label);
+    btn.dataset.fk = "view:" + v;
+    btn.setAttribute("aria-pressed", v === buffView ? "true" : "false");
+    btn.onclick = setView(v);
+    modes.append(btn);
+  });
+  const tools = el("div", "tools");
+  tools.append(modes, toggle("internal", "내부 효과 표시", showInternal, () => {
+    showInternal = !showInternal;
+    store.set("internal", showInternal ? "1" : "0");
+    paint(true);
+  }, "end"));
+
+  const rows = objs(unit.rows);
+  const visible = rows.filter(r => showInternal || r.kind !== "other" || n0(r.maxStacks) > 1);
+  const head = [picker, tools];
+  if (buffView === "events") {
+    if (!Array.isArray(b.buffEvents)) return [...head, el("div", "empty", "불러오는 중입니다.")];
+    // 변화 기록에는 종류가 없으므로 현황 행의 라벨로 내부 효과를 가려낸다
+    const known = new Set(rows.map(r => r.label)), kept = new Set(visible.map(r => r.label));
+    const events = b.buffEvents.filter(ev => !known.has(arr(ev)[1]) || kept.has(arr(ev)[1]));
+    const hiddenCount = b.buffEvents.length - events.length;
+    return [...head, el("div", "note", `표시 ${events.length}건 · 숨김 ${hiddenCount}건`),
+      ...(events.length ? [...events].reverse().map(eventRow) : [el("div", "empty", "변화 기록이 없습니다.")])];
+  }
+  const level = r => b.live ? n0(r.stacks) : n0(r.maxStacks);
+  const sorted = [...visible].sort((x, y) => (b.live ? (n0(y.stacks) > 0) - (n0(x.stacks) > 0) : 0)
+    || level(y) - level(x) || n0(y.uptime) - n0(x.uptime) || String(x.label ?? "").localeCompare(String(y.label ?? "")));
+  return [...head, el("div", "note", `표시 ${visible.length}개 · 숨김 ${rows.length - visible.length}개 · ▲ 버프 ▼ 디버프 ● 기타`),
+    ...(sorted.length ? sorted.map(r => buffRow(r, !!b.live)) : [el("div", "empty", "표시할 효과가 없습니다.")])];
+}
+
+function viewLog({ b }) {
+  const rows = [...arr(b.log)].reverse().map(item => {
+    const [t, name, v] = arr(item);
+    const r = el("div", "log");
+    r.append(el("span", "t", n0(t).toFixed(1)), el("span", "", name ?? ""), el("span", "v", num(v)));
+    return r;
+  });
+  return rows.length ? rows : [el("div", "empty", "로그가 없습니다.")];
+}
+
+async function copyCode(box, button, status) {
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(box.value);
+    copied = true;
+  } catch {
+    box.focus();
+    box.select();
+    try { copied = document.execCommand("copy"); } catch {}
+  }
+  if (copied) {
+    button.textContent = "복사됨";
+    status.textContent = "";
+    setTimeout(() => { button.textContent = "복사"; }, COPY_RESET_MS);
+  } else {
+    status.textContent = "복사가 막혔습니다. 선택된 코드를 Ctrl+C로 복사하세요.";
+  }
+}
+
+function codeSection(info) {
+  if (!info.code) {
+    const why = String(info.codeMissing ?? "");
+    return [el("div", "note", CODE_MISSING[why] || (why.startsWith("ambiguous") ? "같은 캐릭터 구성의 슬롯이 여러 개라 코드를 확정하지 못했습니다." : "코드가 없습니다."))];
+  }
+  const box = el("textarea", "code");
+  box.readOnly = true;
+  box.spellcheck = false;
+  box.value = String(info.code);
+  box.dataset.fk = "code";
+  box.setAttribute("aria-label", "자동 사용 코드");
+  box.onclick = () => box.select();
+  const bar = el("div", "codebar");
+  const button = el("button", "", "복사");
+  button.dataset.fk = "copy";
+  const status = el("span", "", info.on === false ? "이 전투에서는 자동 사용이 꺼져 있었습니다." : "");
+  button.onclick = () => copyCode(box, button, status);
+  bar.append(button, status);
+  return [box, bar];
+}
+
+function equipBox(equip) {
+  const box = el("div", "eq" + (equip ? "" : " off"));
+  const icon = el("span", "eicon");
+  const text = el("div", "etext");
+  if (!equip) {
+    text.append(el("div", "ename", "미장착"));
+    box.append(icon, text);
+    return box;
+  }
+  const label = equip.name ?? String(equip.id ?? "");
+  if (/^\d+$/.test(String(equip.id))) {
+    const img = el("img");
+    img.alt = "";
+    img.onerror = () => img.remove();
+    img.src = `/equip/${equip.id}.webp`;
+    icon.append(img);
+  }
+  const name = el("div", "ename", label);
+  name.title = label;
+  text.append(name, el("div", "elv", Number.isFinite(equip.lv) ? `Lv ${equip.lv}` : ""));
+  box.append(icon, text);
+  return box;
+}
+
+function memberRow(member) {
+  const row = el("div", "member");
+  const head = el("div", "mhead");
+  head.append(partySlot(member), el("span", "mname", member.name ?? String(member.id ?? "")),
+    el("span", "mlv", Number.isFinite(member.lv) ? `Lv ${member.lv}` : ""));
+  const equips = el("div", "equips");
+  equips.append(...arr(member.equips).map(equipBox));
+  row.append(head, equips);
+  return row;
+}
+
+function viewLineup({ b }) {
+  const info = b.lineup && typeof b.lineup === "object" ? b.lineup : null;
+  if (!info) return [el("div", "empty", b.live ? "편성 정보를 읽는 중입니다." : NO_RECORD)];
+  const team = objs(info.team);
+  return [
+    el("div", "sec", "자동 사용 코드"),
+    ...codeSection(info),
+    el("div", "sec", "캐릭터 레벨 / 장비"),
+    ...(team.length ? team.map(memberRow) : [el("div", "note", "캐릭터 정보가 없습니다.")]),
+  ];
+}
+
+const VIEWS = { roles: viewRoles, skills: viewSkills, cost: viewCost, buffs: viewBuffs, lineup: viewLineup, log: viewLog };
+
+// 목록을 통째로 바꾸되 키보드 포커스는 같은 요소로 되돌린다
+function swap(nodes) {
+  const host = $("list");
+  const active = document.activeElement;
+  const fk = active && host.contains(active) ? active.dataset.fk : "";
+  host.replaceChildren(...nodes);
+  if (fk) {
+    const target = [...host.querySelectorAll("[data-fk]")].find(n => n.dataset.fk === fk);
+    if (target) target.focus({ preventScroll: true });
+  }
+}
+
+// 누르고 있는 동안에는 목록을 다시 그리지 않는다.
+// 누름과 뗌 사이에 요소가 바뀌면 브라우저가 click 을 보내지 않아 클릭이 사라진다.
+const pressing = () => performance.now() - pressedAt < 600;
+
+function render(force) {
+  if (!data) return;
+  syncArm();
+  const b = screen === "detail" ? data.battle || null : null;
+  $("server").hidden = !data.server;
+  $("server").textContent = data.server ? data.server.name : "";
+  $("status").textContent = b && !b.live ? dateText(b.started) : data.status || "";
+  $("status").className = (screen === "list" ? data.active : b && b.live) ? "live" : "";
+  if (screen === "list") return renderHome(force);
+  const roles = b ? Object.values(obj(b.roles)).map(obj).sort((x, y) => n0(y.damage) - n0(x.damage)) : [];
+  const total = roles.reduce((a, r) => a + n0(r.damage), 0);
+  const key = (b ? [b.id, b.frame, b.game_duration, !!b.live, Math.round(total), arr(b.cards).length, arr(b.buffEvents).length] : ["-"])
+    .concat(data.status, tab, roleFocus, groupSame, buffUnit, buffView, showInternal).join(":");
+  if (!force && (key === lastKey || pressing())) return;
+  lastKey = key;
+  const role = b && roleFocus ? obj(b.roles)[roleFocus] : null;
+  $("crumb").style.display = role && tab === "roles" ? "flex" : "none";
+  if (role) $("crumbName").textContent = role.name || "";
+  if (!b) {
+    $("total").textContent = "0"; $("dps").textContent = "0"; $("time").textContent = "0:00";
+    $("spark").replaceChildren();
+    swap([el("div", "empty", "이 기록을 불러오지 못했습니다.")]);
+    return;
+  }
+  const secs = secondsOf(b);
+  $("total").textContent = num(total);
+  $("dps").textContent = secs ? num(total / secs) : "0";
+  $("time").textContent = clock(secs);
+  renderSpark(b.timeline);
+  const skills = Object.values(obj(b.skills)).map(obj).filter(s => n0(s.dmg) > 0 || n0(s.use) > 0).sort((x, y) => n0(y.dmg) - n0(x.dmg));
+  // 편성 탭은 전투가 진행돼도 내용이 그대로면 다시 그리지 않는다 (코드 선택과 복사 표시를 유지)
+  const lineup = tab === "lineup" ? b.id + JSON.stringify(b.lineup ?? null) + !!b.live : "";
+  if (force || !lineup || lineup !== lineupDrawn) {
+    lineupDrawn = lineup;
+    swap(VIEWS[tab]({ b, roles, skills, total, secs, role }));
+    paintHover();
+  }
+}
+
+function paint(force) {
+  try {
+    render(force);
+    drawError = "";
+  } catch (err) {
+    drawError = "화면을 그리지 못했습니다: " + (err && err.message || err);
+    lastKey = "";
+    console.error(err);
+  }
+  const message = (data && data.error) || drawError;
+  $("err").textContent = message || "";
+  $("err").style.display = message ? "block" : "none";
+}
+
+function syncArm() {
+  const armed = !!(data && data.armed);
+  $("armOn").disabled = armed;
+  $("armOff").disabled = !armed;
+  $("armOn").classList.toggle("on", armed);
+  $("armOn").setAttribute("aria-pressed", armed ? "true" : "false");
+}
+
+async function setArmed(on) {
+  if (data) { data.armed = on; syncArm(); }
+  try { await fetch("/api/arm?on=" + (on ? 1 : 0), { method: "POST" }); } catch {}
+  refresh(true);
+}
+
+function viewUrl() {
+  if (screen === "list") return "/api/view?list=1";
+  const units = objs(data && data.battle && data.battle.buffs);
+  // 지금 전투에 없는 유닛이면 빈 값으로 보내 서버가 첫 유닛을 고르게 한다
+  const unit = units.length && !units.some(u => String(u.key) === buffUnit) ? "" : buffUnit;
+  return `/api/view?battle=${encodeURIComponent(picked)}&unit=${encodeURIComponent(unit)}`;
+}
+
+async function refresh(force) {
+  if (busy && !force) return;
+  const id = ++seq;
+  busy = true;
+  lastFetch = performance.now();
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), 4000);
+  let next = null;
+  try {
+    const res = await fetch(viewUrl(), { signal: stop.signal });
+    next = await res.json();
+  } catch {
+    if (id === seq && ++fails >= LOST_AFTER) {
+      $("status").textContent = "미터 서버에 연결할 수 없습니다";
+      $("status").className = "";
+    }
+  }
+  clearTimeout(timer);
+  if (id !== seq) return;
+  busy = false;
+  if (next) { fails = 0; data = next; paint(force); }
+}
+
+// 툴팁은 목록에 위임한다: 그래프가 다시 그려져도 같은 자리에서 이어진다
+$("list").addEventListener("mousemove", e => {
+  const plot = e.target.closest ? e.target.closest(".plot[data-chart]") : null;
+  if (!plot && !hover) return;
+  hover = plot ? { id: plot.dataset.chart, x: e.clientX } : null;
+  paintHover();
+});
+$("list").addEventListener("mouseleave", () => { hover = null; paintHover(); });
+$("list").addEventListener("pointerdown", () => { pressedAt = performance.now(); });
+window.addEventListener("pointerup", () => setTimeout(() => { pressedAt = -1e9; }));
+
+$("back").onclick = () => { roleFocus = ""; $("list").scrollTop = 0; paint(true); };
+$("home").onclick = closeBattle;
+$("armOn").onclick = () => setArmed(true);
+$("armOff").onclick = () => setArmed(false);
+$("pin").onchange = async e => {
+  try { await fetch("/api/pin?on=" + (e.target.checked ? 1 : 0), { method: "POST" }); } catch {}
+};
+syncTabs();
+refresh();
+setInterval(() => { if (screen === "detail" || performance.now() - lastFetch >= HOME_POLL_MS) refresh(); }, POLL_MS);
+</script>
+</body>
+</html>

@@ -1,0 +1,806 @@
+[
+ {
+  "id": 10000004,
+  "name": "카타스",
+  "zh": "卡塔斯",
+  "released": true
+ },
+ {
+  "id": 10000009,
+  "name": "시장(적진영 스토리)",
+  "zh": "市长（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000025,
+  "name": "줄리안",
+  "zh": "朱利安",
+  "released": true
+ },
+ {
+  "id": 10000027,
+  "name": "하루카",
+  "zh": "遥",
+  "released": true
+ },
+ {
+  "id": 10000030,
+  "name": "아이기스 BO-X",
+  "zh": "神盾波克士",
+  "released": false
+ },
+ {
+  "id": 10000031,
+  "name": "조슈아",
+  "zh": "约书亚",
+  "released": true
+ },
+ {
+  "id": 10000032,
+  "name": "니콜라",
+  "zh": "妮蔻拉",
+  "released": true
+ },
+ {
+  "id": 10000034,
+  "name": "하야부사",
+  "zh": "隼",
+  "released": true
+ },
+ {
+  "id": 10000035,
+  "name": "더스틴",
+  "zh": "达斯廷",
+  "released": true
+ },
+ {
+  "id": 10000047,
+  "name": "발렌타인",
+  "zh": "瓦伦汀",
+  "released": true
+ },
+ {
+  "id": 10000051,
+  "name": "아리나",
+  "zh": "亚莉奈",
+  "released": true
+ },
+ {
+  "id": 10000052,
+  "name": "나비",
+  "zh": "奈弥",
+  "released": true
+ },
+ {
+  "id": 10000053,
+  "name": "이엘",
+  "zh": "伊尔",
+  "released": true
+ },
+ {
+  "id": 10000054,
+  "name": "마키라",
+  "zh": "马吉拉",
+  "released": true
+ },
+ {
+  "id": 10000055,
+  "name": "리비아",
+  "zh": "莉薇娅",
+  "released": true
+ },
+ {
+  "id": 10000059,
+  "name": "코나",
+  "zh": "柯娜",
+  "released": true
+ },
+ {
+  "id": 10000060,
+  "name": "타라",
+  "zh": "塔拉",
+  "released": true
+ },
+ {
+  "id": 10000062,
+  "name": "솔럼",
+  "zh": "狮鬃",
+  "released": true
+ },
+ {
+  "id": 10000063,
+  "name": "마루하",
+  "zh": "魇",
+  "released": true
+ },
+ {
+  "id": 10000064,
+  "name": "세실",
+  "zh": "塞西尔",
+  "released": true
+ },
+ {
+  "id": 10000065,
+  "name": "레이카",
+  "zh": "雷火",
+  "released": true
+ },
+ {
+  "id": 10000068,
+  "name": "데시레",
+  "zh": "黛丝莉",
+  "released": true
+ },
+ {
+  "id": 10000069,
+  "name": "샬롯",
+  "zh": "夏洛蒂",
+  "released": true
+ },
+ {
+  "id": 10000071,
+  "name": "아오바",
+  "zh": "苍叶",
+  "released": true
+ },
+ {
+  "id": 10000072,
+  "name": "나유타",
+  "zh": "那由他",
+  "released": true
+ },
+ {
+  "id": 10000094,
+  "name": "소마",
+  "zh": "索玛",
+  "released": true
+ },
+ {
+  "id": 10000095,
+  "name": "도로시",
+  "zh": "多萝西",
+  "released": true
+ },
+ {
+  "id": 10000101,
+  "name": "카리야",
+  "zh": "卡莱雅",
+  "released": true
+ },
+ {
+  "id": 10000110,
+  "name": "린",
+  "zh": "霖",
+  "released": true
+ },
+ {
+  "id": 10000111,
+  "name": "게롤",
+  "zh": "伽罗尔",
+  "released": true
+ },
+ {
+  "id": 10000112,
+  "name": "간야",
+  "zh": "甘雅",
+  "released": true
+ },
+ {
+  "id": 10000117,
+  "name": "알니타크",
+  "zh": "参宿一",
+  "released": false
+ },
+ {
+  "id": 10000124,
+  "name": "아키라",
+  "zh": "晃",
+  "released": true
+ },
+ {
+  "id": 10000134,
+  "name": "엘리엇",
+  "zh": "艾略特",
+  "released": true
+ },
+ {
+  "id": 10000137,
+  "name": "본인",
+  "zh": "自己",
+  "released": false
+ },
+ {
+  "id": 10000139,
+  "name": "캐롤라인",
+  "zh": "卡洛琳",
+  "released": true
+ },
+ {
+  "id": 10000145,
+  "name": "리산드라",
+  "zh": "丽桑德拉",
+  "released": true
+ },
+ {
+  "id": 10000153,
+  "name": "요이즈키",
+  "zh": "宵月",
+  "released": true
+ },
+ {
+  "id": 10000154,
+  "name": "이로나",
+  "zh": "伊洛娜",
+  "released": true
+ },
+ {
+  "id": 10000156,
+  "name": "시즈루",
+  "zh": "静流",
+  "released": true
+ },
+ {
+  "id": 10000157,
+  "name": "아르카나",
+  "zh": "阿尔喀娜",
+  "released": true
+ },
+ {
+  "id": 10000158,
+  "name": "가리나",
+  "zh": "加丽娜",
+  "released": false
+ },
+ {
+  "id": 10000159,
+  "name": "성검 BO-X",
+  "zh": "圣剑波克士",
+  "released": true
+ },
+ {
+  "id": 10000160,
+  "name": "프란",
+  "zh": "弗兰",
+  "released": true
+ },
+ {
+  "id": 10000170,
+  "name": "카렌",
+  "zh": "卡莲",
+  "released": true
+ },
+ {
+  "id": 10000173,
+  "name": "본인",
+  "zh": "自己",
+  "released": false
+ },
+ {
+  "id": 10000245,
+  "name": "레비스",
+  "zh": "雷比斯",
+  "released": false
+ },
+ {
+  "id": 10000254,
+  "name": "샤이어",
+  "zh": "夏尔",
+  "released": true
+ },
+ {
+  "id": 10000270,
+  "name": "하인리히",
+  "zh": "海因里希",
+  "released": true
+ },
+ {
+  "id": 10000276,
+  "name": "테니",
+  "zh": "苔妮",
+  "released": true
+ },
+ {
+  "id": 10000289,
+  "name": "BOX（적 스토리）",
+  "zh": "BOX（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000293,
+  "name": "파괴왕 (적 스토리)",
+  "zh": "破烂王（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000294,
+  "name": "달리아",
+  "zh": "达莉娅",
+  "released": false
+ },
+ {
+  "id": 10000297,
+  "name": "리바",
+  "zh": "瑞瓦",
+  "released": true
+ },
+ {
+  "id": 10000298,
+  "name": "스텔라",
+  "zh": "星花",
+  "released": true
+ },
+ {
+  "id": 10000299,
+  "name": "레이첼",
+  "zh": "瑞秋",
+  "released": true
+ },
+ {
+  "id": 10000300,
+  "name": "페니아",
+  "zh": "菲妮娅",
+  "released": true
+ },
+ {
+  "id": 10000301,
+  "name": "테러리스트 보스(적 스토리)",
+  "zh": "恐怖分子首领（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000335,
+  "name": "예주",
+  "zh": "叶珏",
+  "released": true
+ },
+ {
+  "id": 10000349,
+  "name": "하루카 (적 스토리)",
+  "zh": "遥（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000352,
+  "name": "수엔",
+  "zh": "苏恩",
+  "released": true
+ },
+ {
+  "id": 10000372,
+  "name": "안피아",
+  "zh": "安菲娅",
+  "released": true
+ },
+ {
+  "id": 10000385,
+  "name": "",
+  "zh": "",
+  "released": false
+ },
+ {
+  "id": 10000387,
+  "name": "아치와",
+  "zh": "阿知波",
+  "released": true
+ },
+ {
+  "id": 10000388,
+  "name": "문생",
+  "zh": "闻笙",
+  "released": true
+ },
+ {
+  "id": 10000389,
+  "name": "리나 본",
+  "zh": "冯·里奈",
+  "released": true
+ },
+ {
+  "id": 10000391,
+  "name": "에즈라",
+  "zh": "埃兹拉",
+  "released": false
+ },
+ {
+  "id": 10000408,
+  "name": "BO-X",
+  "zh": "波克士",
+  "released": true
+ },
+ {
+  "id": 10000409,
+  "name": "네즈미",
+  "zh": "跳鼠",
+  "released": true
+ },
+ {
+  "id": 10000410,
+  "name": "샤이어 (적 스토리)",
+  "zh": "夏尔（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000412,
+  "name": "밀리",
+  "zh": "米莉",
+  "released": false
+ },
+ {
+  "id": 10000414,
+  "name": "야마아라시",
+  "zh": "山岚",
+  "released": true
+ },
+ {
+  "id": 10000468,
+  "name": "시즈루·여름 바캉스",
+  "zh": "静流·逐夏",
+  "released": true
+ },
+ {
+  "id": 10000473,
+  "name": "공백",
+  "zh": "空",
+  "released": true
+ },
+ {
+  "id": 10000499,
+  "name": "아일리",
+  "zh": "雅莱",
+  "released": true
+ },
+ {
+  "id": 10000503,
+  "name": "이소스",
+  "zh": "伊索斯",
+  "released": true
+ },
+ {
+  "id": 10000546,
+  "name": "이코마",
+  "zh": "生驹",
+  "released": true
+ },
+ {
+  "id": 10000572,
+  "name": "마키라·점성술사",
+  "zh": "马吉拉·星仪",
+  "released": true
+ },
+ {
+  "id": 10000573,
+  "name": "코무기",
+  "zh": "小麦",
+  "released": true
+ },
+ {
+  "id": 10000607,
+  "name": "파라디",
+  "zh": "帕拉笛",
+  "released": true
+ },
+ {
+  "id": 10000615,
+  "name": "페로타",
+  "zh": "佩罗塔",
+  "released": true
+ },
+ {
+  "id": 10000623,
+  "name": "미스 골드",
+  "zh": "金子小姐",
+  "released": true
+ },
+ {
+  "id": 10000624,
+  "name": "무메이",
+  "zh": "无名",
+  "released": true
+ },
+ {
+  "id": 10000632,
+  "name": "라지엘·회상",
+  "zh": "罗洁尔·定格",
+  "released": true
+ },
+ {
+  "id": 10000705,
+  "name": "아리나(적 스토리)",
+  "zh": "亚莉奈（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000706,
+  "name": "예주(적 스토리)",
+  "zh": "叶珏（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000707,
+  "name": "하야부사(적 스토리)",
+  "zh": "隼（敌方剧情）",
+  "released": false
+ },
+ {
+  "id": 10000739,
+  "name": "베를렌",
+  "zh": "薇尔岚",
+  "released": true
+ },
+ {
+  "id": 10000741,
+  "name": "BO-F",
+  "zh": "波克美",
+  "released": false
+ },
+ {
+  "id": 10000743,
+  "name": "로켓 펀치 BO-X",
+  "zh": "火箭拳波克士",
+  "released": false
+ },
+ {
+  "id": 10000744,
+  "name": "BO-K",
+  "zh": "波克王",
+  "released": false
+ },
+ {
+  "id": 10000748,
+  "name": "라지엘",
+  "zh": "罗洁尔",
+  "released": true
+ },
+ {
+  "id": 10000749,
+  "name": "우샤나",
+  "zh": "乌刹娜",
+  "released": true
+ },
+ {
+  "id": 10000796,
+  "name": "마사키",
+  "zh": "真咲",
+  "released": true
+ },
+ {
+  "id": 10000843,
+  "name": "클로이",
+  "zh": "克洛伊",
+  "released": true
+ },
+ {
+  "id": 10000854,
+  "name": "婕丝&西蒙",
+  "zh": "婕丝&西蒙",
+  "released": false
+ },
+ {
+  "id": 10000855,
+  "name": "렌",
+  "zh": "涟",
+  "released": true
+ },
+ {
+  "id": 10000890,
+  "name": "이카라",
+  "zh": "伊卡菈",
+  "released": true
+ },
+ {
+  "id": 10000891,
+  "name": "열차장",
+  "zh": "列车长",
+  "released": false
+ },
+ {
+  "id": 10000920,
+  "name": "엘리아데",
+  "zh": "伊利亚德",
+  "released": true
+ },
+ {
+  "id": 10000941,
+  "name": "시라",
+  "zh": "时萝",
+  "released": true
+ },
+ {
+  "id": 10000942,
+  "name": "스로카이",
+  "zh": "斯洛卡伊",
+  "released": true
+ },
+ {
+  "id": 10000969,
+  "name": "레카지아",
+  "zh": "莱卡吉亚",
+  "released": true
+ },
+ {
+  "id": 10000979,
+  "name": "올리비엔",
+  "zh": "奥莉薇恩",
+  "released": true
+ },
+ {
+  "id": 10001003,
+  "name": "헬레나",
+  "zh": "海伦娜",
+  "released": true
+ },
+ {
+  "id": 10001019,
+  "name": "도라미스",
+  "zh": "朵拉弥丝",
+  "released": true
+ },
+ {
+  "id": 10001052,
+  "name": "체시아",
+  "zh": "切茜娅",
+  "released": true
+ },
+ {
+  "id": 10001089,
+  "name": "카르",
+  "zh": "嘉尔",
+  "released": true
+ },
+ {
+  "id": 10001092,
+  "name": "진서한",
+  "zh": "陈书闲",
+  "released": true
+ },
+ {
+  "id": 10001157,
+  "name": "헤카테",
+  "zh": "赫卡蒂",
+  "released": true
+ },
+ {
+  "id": 10001203,
+  "name": "보스토크",
+  "zh": "沃斯托克",
+  "released": true
+ },
+ {
+  "id": 10001220,
+  "name": "카타스·이그니스",
+  "zh": "卡塔斯·业火",
+  "released": true
+ },
+ {
+  "id": 10001222,
+  "name": "티스타르",
+  "zh": "蒂丝塔尔",
+  "released": true
+ },
+ {
+  "id": 10001246,
+  "name": "라다",
+  "zh": "拉妲",
+  "released": true
+ },
+ {
+  "id": 10001266,
+  "name": "샬롯·스틸하트",
+  "zh": "夏洛蒂·澄心",
+  "released": true
+ },
+ {
+  "id": 10001271,
+  "name": "샤나",
+  "zh": "夏娜",
+  "released": true
+ },
+ {
+  "id": 10001314,
+  "name": "루비",
+  "zh": "露比",
+  "released": true
+ },
+ {
+  "id": 10001327,
+  "name": "테레사",
+  "zh": "迪妮莎",
+  "released": true
+ },
+ {
+  "id": 10001356,
+  "name": "도로시·로지몬",
+  "zh": "多萝西·瑰晨",
+  "released": true
+ },
+ {
+  "id": 10001357,
+  "name": "이로나·트와일라잇",
+  "zh": "伊洛娜·暮光",
+  "released": true
+ },
+ {
+  "id": 10001367,
+  "name": "联动1号",
+  "zh": "联动1号",
+  "released": false
+ },
+ {
+  "id": 10001368,
+  "name": "联动2号",
+  "zh": "联动2号",
+  "released": false
+ },
+ {
+  "id": 10001370,
+  "name": "联动3号",
+  "zh": "联动3号",
+  "released": false
+ },
+ {
+  "id": 10001371,
+  "name": "联动4号",
+  "zh": "联动4号",
+  "released": false
+ },
+ {
+  "id": 10001377,
+  "name": "에밀리",
+  "zh": "爱弥儿",
+  "released": true
+ },
+ {
+  "id": 10001379,
+  "name": "에밀리123",
+  "zh": "爱弥儿123",
+  "released": false
+ },
+ {
+  "id": 10001380,
+  "name": "挨揍人",
+  "zh": "挨揍人",
+  "released": false
+ },
+ {
+  "id": 10001381,
+  "name": "挨揍人",
+  "zh": "挨揍人",
+  "released": false
+ },
+ {
+  "id": 10001382,
+  "name": "挨揍人",
+  "zh": "挨揍人",
+  "released": false
+ },
+ {
+  "id": 10001383,
+  "name": "청연",
+  "zh": "蓝鹊儿",
+  "released": true
+ },
+ {
+  "id": 10001393,
+  "name": "메이치",
+  "zh": "美琪",
+  "released": true
+ },
+ {
+  "id": 10001478,
+  "name": "菲妮娅·烁梦",
+  "zh": "菲妮娅·烁梦",
+  "released": false
+ },
+ {
+  "id": 10001491,
+  "name": "亚莉奈·危情",
+  "zh": "亚莉奈·危情",
+  "released": false
+ },
+ {
+  "id": 10001531,
+  "name": "朱月",
+  "zh": "朱月",
+  "released": false
+ }
+]
