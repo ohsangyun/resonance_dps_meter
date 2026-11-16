@@ -302,7 +302,7 @@ function itemBox(b) {
   box.setAttribute("aria-label", `${b.live ? "진행 중인 전투" : dateText(b.started) + " 기록"}, 조합 ${names || "정보 없음"}, 총 피해 ${num(b.total)}`);
   const when = el("div", "when");
   when.append(b.live ? el("span", "badge", "전투 중") : el("span", "", dateText(b.started)));
-  if (b.server) when.append(el("span", "srv", (data.servers || {})[b.server] || String(b.server))); // 서버 표시 (기록의 server — 여러 서버의 기록을 한 폴더에 모아도 가릴 수 있게)
+  if (b.server) when.append(el("span", "srv", (data.servers || {})[b.server] || String(b.server)));
   const slots = el("div", "slots");
   for (let i = 0; i < Math.max(PARTY_SLOTS, party.length); i += 1) slots.append(partySlot(party[i]));
   const foot = el("div", "foot");

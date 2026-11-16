@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
-"""레조넌스 딜 미터: 실행 중인 게임의 전투 상태를 읽어 피해·비용·손패·버프를 기록하고 보여 준다.
+"""레조넌스 딜 미터: 실행 중인 게임의 전투를 읽어 피해·비용·손패·버프를 기록하고 보여 준다.
 
-게임 메모리는 읽기만 한다 (PROCESS_QUERY_INFORMATION | PROCESS_VM_READ).
-쓰기·코드 주입·게임 파일 변경은 하지 않으며, 읽기가 막히면 오류를 표시하고 멈춘다.
+게임 메모리와 레지스트리(자동 사용 설정)는 읽기만 한다. 쓰기·코드 주입·게임 파일 변경은 하지 않는다.
+기록의 시간축은 게임 프레임(t = frame/60), 비용과 속성의 SN 은 값 x 10000 이다.
 
-자동 사용 설정은 레지스트리(Unity PlayerPrefs)에서 역시 읽기만 한다.
-육성 정보는 이번 전투에 실제로 들어간 메모리 값만 쓴다. 로그인 때 한 번 찍히는 Player.log 는 그 뒤의 변경을 모르므로 쓰지 않는다.
-
-전투는 메모리 스캔 없이 정적 경로로만 찾는다.
-  BuffBase 정적 필드 +0x18 = BattleControlManager → TeamData → BattleData → BattleResult
-게임이 업데이트되면 RVA 를 다시 뽑아야 한다. 시작할 때 클래스 이름으로 검증한다.
-
-기록의 시간축은 전부 게임 프레임이다 (t = frame/60, 게임 타이머 기준. 시뮬 시각+3초≈게임 시각).
-비용과 속성의 SN 은 값 x 10000 이다.
-
-사용법
-  딜미터.pyw 더블클릭                           창 띄우기 (항상 위, 이미 켜져 있으면 창만 다시 연다)
-  python dps-meter/dps_meter.py --no-window     서버만 실행
-  python dps-meter/dps_meter.py --check         지금 전투 상태를 한 번 출력
+  딜미터.pyw 더블클릭          창 띄우기
+  dps_meter.py --no-window     서버만 실행
+  dps_meter.py --check         지금 전투 상태를 한 번 출력
 """
 import argparse
 import base64
@@ -50,14 +39,14 @@ ROOT = HERE.parent
 def main_checkout(root):
     """git 작업 폴더(worktree)에서 켰으면 원래 저장소 폴더를, 아니면 root 를 돌려준다."""
     try:
-        marker = (root / ".git").read_text(encoding="utf-8").strip()  # 작업 폴더의 .git 은 "gitdir: ..." 한 줄짜리 파일
+        marker = (root / ".git").read_text(encoding="utf-8").strip()
         if marker.startswith("gitdir:"):
             gitdir = (root / marker[len("gitdir:"):].strip()).resolve()
             common = (gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()).resolve()
             if common.name == ".git":
                 return common.parent
     except OSError:
-        pass  # 원래 저장소 폴더라 .git 이 폴더이거나, git 밖에 있다.
+        pass
     return root
 
 
@@ -78,16 +67,13 @@ PORTRAIT_PATH = re.compile(r"/unit/([0-9]{1,12})\.webp")
 EQUIP_ICON_DIR = asset_dir("web", "img", "equip")
 EQUIP_ICON_PATH = re.compile(r"/equip/([0-9]{1,12})\.webp")
 APPDIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ResonanceDpsMeter"
-# 서버 정보 표 (2026-11-16): 서버마다 실행 파일 이름·Unity PlayerPrefs 레지스트리 키·클래스 주소표(RVA)가 다르다.
-#   켜져 있는 게임의 실행 파일 이름으로 서버를 가리고(find_pid), 그 서버의 값으로 아래 전역(PROCESS_NAME·GAME_PREFS_KEY·RVA)을 맞춘다(use_server).
-#   기록에는 서버 번호(server)와 게임 빌드(build)를 적는다 — 여러 사람·여러 서버의 기록을 한데 모아도 가릴 수 있게.
-#   주소표는 그 서버 설치본을 Il2CppDumper 로 풀어야 나온다. 지금은 한섭만 있다: 다른 서버(일섭·중섭·글섭)는 실행 파일 이름·레지스트리 키·주소표를 확인해 한 줄을 더한다.
+# 서버마다 실행 파일 이름·PlayerPrefs 레지스트리 키·클래스 주소표(RVA)가 다르다.
 SERVERS = {
     "kr": {"name": "한섭", "process": "레조넌스.exe", "prefs": "Software\\临界\\레조넌스",
            "rva": {"BattleResult": 0x4411848, "RoleInfo": 0x4411168, "BattleSkillInfo": 0x4411120,
                    "BuffBase": 0x440F918, "TeamData": 0x4411AA8}},
 }
-SERVER = "kr"  # 지금 붙은(또는 마지막으로 찾은) 게임의 서버
+SERVER = "kr"
 GAME_PREFS_KEY = SERVERS[SERVER]["prefs"]
 # 값 이름 앞부분은 계정 식별자다. 뒤쪽 키만 쓰고 이름 전체는 어디에도 남기지 않는다.
 PREFS_NAME = re.compile(r"^.*?(CardAIData|CardAIOn|CardAIBan)(.*?)_h\d+$")
@@ -98,7 +84,7 @@ RVA = SERVERS[SERVER]["rva"]
 
 
 def use_server(server):
-    """지금 붙을 게임의 서버를 고른다 (실행 파일 이름·레지스트리 키·주소표를 그 서버 것으로)."""
+    """붙을 게임의 서버를 고른다."""
     global SERVER, PROCESS_NAME, GAME_PREFS_KEY, RVA
     info = SERVERS[server]
     SERVER, PROCESS_NAME, GAME_PREFS_KEY, RVA = server, info["process"], info["prefs"], info["rva"]
@@ -107,7 +93,7 @@ def use_server(server):
 STATE_NAMES = {4: "전투 중", 3: "전투 시작 대기", 5: "대열 정비", 6: "팀 카드 선택", 7: "이동 중",
                8: "승리 연출", 1: "전투 종료"}
 
-SCHEMA_VERSION = 5  # 3: cards[].target/pos/ai, ops, snapshots 유닛 pos 추가. 4: 게임 프레임마다 표본, hits/actions/dotTicks 추가. 5: server(서버 번호)·build(게임 빌드) 추가
+SCHEMA_VERSION = 5
 POLL_HZ = 60  # 게임 프레임(초당 60)이 바뀔 때마다 한 번 읽는다
 FRAME_SLEEP = 0.002  # 프레임이 바뀌었는지 보는 간격
 RECHECK_SECONDS = 0.05  # 프레임이 멈춰 있을 때(일시정지·종료 직후) 다시 읽는 간격
@@ -118,7 +104,7 @@ PID_CHECK_SECONDS = 3
 STALE_SECONDS = 600
 PAUSE_SECONDS = 2
 FLOW_FRAMES = 6
-BUFF_FRAMES = 3  # 버프 표본은 3프레임(약 0.05초)마다 — 전부 읽으면 무거워서 프레임마다 하지 않는다
+BUFF_FRAMES = 3  # 버프 표본 간격(프레임)
 SETTLE_FRAMES = 12
 MAX_LINK = 1024
 MAX_DICT = 4096
@@ -137,10 +123,8 @@ META_FIELDS = ("id", "server", "started", "roles", "conditions", "cardOwners", "
 ADDRESS_MIN = 0x10000
 ADDRESS_MAX = 0x7FFFFFFF0000
 
-# 세부 스펙 (spec). 메모리 값은 전투 시작 부근에 몇 번만 읽는다.
-SPEC_VERSION = 3  # 1 은 일부 필드를 Player.log 로 채우던 옛 기록이다. 3: spec.battle 에 ReplayManager 의 관문 인자(날씨 후보 등) 추가
+SPEC_VERSION = 3
 # ReplayManager 가 InitBattle 로 받은 관문 인자 (이름, 오프셋, 형식). LevelManager.CreateWeather 가 날씨 후보를 읽는다.
-# 이름은 게임 필드 이름 그대로 — 엔진 재현 시험(tests_replay.rs level_opts_from_log)이 spec.battle 에서 같은 이름으로 읽는다.
 REPLAY_INIT_FIELDS = (("isBattleTest", 0x98, "bool"), ("isArena", 0x99, "bool"), ("playerTeamNO", 0x9C, "i32"),
                       ("enemyLevelMin", 0xA0, "i32"), ("difficulty", 0xA4, "i32"), ("bgId", 0xA8, "i32"), ("enemyRn", 0xAC, "i32"),
                       ("weatherList", 0xB0, "int[]"), ("weatherCount", 0xB8, "i32"), ("weatherRateSN", 0xC0, "i64"),
@@ -214,7 +198,7 @@ psapi.GetModuleBaseNameW.argtypes = [W.HANDLE, W.HMODULE, W.LPWSTR, W.DWORD]
 
 
 def find_pid():
-    """서버 정보 표에 있는 게임 실행 파일을 찾는다. 찾으면 그 서버로 맞추고(use_server) pid 를 돌려준다."""
+    """서버 정보 표에 있는 게임 프로세스를 찾아 pid 를 돌려준다."""
     by_process = {info["process"]: server for server, info in SERVERS.items()}
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     entry = PROCESSENTRY32W()
@@ -289,7 +273,7 @@ class Reader:
         kernel32.CloseHandle(self.handle)
 
     def build(self):
-        """게임 빌드 표시: GameAssembly.dll 머리말의 빌드 시각과 이미지 크기 (게임이 업데이트되면 바뀐다). 못 읽으면 None."""
+        """게임 빌드 표시(GameAssembly.dll 의 빌드 시각·이미지 크기). 못 읽으면 None."""
         head = self.read(self.base, 0x40) if self.base else None
         pe = self.read(self.base + struct.unpack_from("<I", head, 0x3C)[0], 0x58) if head and head[:2] == b"MZ" else None
         if not pe or pe[:4] != b"PE\0\0":
@@ -594,7 +578,7 @@ class Reader:
             for field, (low, high) in UNIT_INFO_LIMITS.items():
                 if not low <= unit[field] <= high:
                     return None, f"UnitInfo.{field} 값이 범위를 벗어났습니다. 오프셋이 바뀌었을 수 있습니다"
-        # randomSeed(+0x34): BattleMain.GameStart 가 이 값으로 SafeMath.SetRandomSeed 를 부른다 — 시뮬이 같은 판을 재현할 때 쓴다. playerLv(+0x40) 도 관문 생성 인자다
+        # randomSeed(+0x34), playerLv(+0x40)
         init, init_error = self.replay_init_args(manager)
         return {"levelId": i32_at(replay, 0x38), "randomSeed": i32_at(replay, 0x34), "playerLv": i32_at(replay, 0x40), "isReplay": bool(head[0x28]), "units": units,
                 "extraCards": read_text(u64_at(replay, 0x58)), "enemyIds": read_text(u64_at(replay, 0x60)),
@@ -602,8 +586,7 @@ class Reader:
                 "init": init, "initError": init_error}, None
 
     def replay_init_args(self, manager):
-        """ReplayManager 가 InitBattle 로 받은 관문 인자(날씨 후보·확률, 난이도 등). 반환: (값, 실패 이유).
-        날씨 후보 배열이 null 이면 None 으로 둔다 — 엔진은 null 과 빈 배열을 다르게 다룬다."""
+        """ReplayManager 가 InitBattle 로 받은 관문 인자(날씨 후보·확률, 난이도 등). 반환: (값, 실패 이유)."""
         raw = self.read(manager + REPLAY_INIT_START, REPLAY_INIT_END - REPLAY_INIT_START)
         if raw is None:
             return None, "ReplayManager 관문 인자를 읽지 못했습니다"
@@ -641,9 +624,7 @@ class Reader:
         return list(struct.unpack(f"<{size}i", data))
 
     def operation_logs(self, manager, start):
-        """ReplayManager.replay.operationLogList (List<Replay.OperationLog>, 0x50바이트 구조체) 의 start 번째부터.
-        게임이 리플레이용으로 남기는 조작 기록이라 카드 사용 좌표(xSN·zSN)와 대상 uniqueId 가 그대로 들어 있다.
-        cardIndex 는 사용 당시 손패 번호, -1 이면 손패 교체(refresh)나 팀 카드 선택(teamCard) 기록이다."""
+        """ReplayManager.replay.operationLogList (List<Replay.OperationLog>, 0x50바이트 구조체) 의 start 번째부터."""
         head = self.read(manager, 0x38) if manager else None
         replay_raw = self.read(u64_at(head, 0x30), 0x88) if head else None
         listing = self.read(u64_at(replay_raw, 0x80), 0x20) if replay_raw else None
@@ -680,8 +661,7 @@ class Reader:
                 "blackboard": self.dict_str_int(u64_at(raw, 0x60))}
 
     def card_order(self, ptr, start):
-        """cardOrder (List<RecordCardInfo>) 의 start 번째부터의 새 항목.
-        게임이 막 추가해 아직 비어 있는 칸이 나오면 거기서 멈추고 다음 틱에 다시 읽는다."""
+        """cardOrder (List<RecordCardInfo>) 의 start 번째부터의 새 항목."""
         out = []
         for item in self.list_items(ptr, start):
             raw = self.read(item, 0x68) if item else None
@@ -708,11 +688,7 @@ class Reader:
         return self.card_ca(self.u64(card + 0x108)) if card else None
 
     def hand_cards(self, head, adjust):
-        """손패를 [{id, name, cost}] 로 읽는다.
-
-        cost 는 근사값이다: 카드 기본 비용에 _adjustCostDic 을 반영하고 카드 자신의
-        CostOffset·TempCostOffset 을 더한 값이며, _lockCost_SN 이 있으면 그 값으로 대체한다.
-        유닛 오프셋과 손패 할인 버프는 게임 로직이 복잡해 제외했다."""
+        """손패를 [{id, name, cost}] 로 읽는다. cost 는 근사값이다."""
         out = []
         for item in self.link_items(head):
             raw = self.read(item, 0xD8)
@@ -843,10 +819,7 @@ class Reader:
         return out
 
     def buffs_of(self, system):
-        """BuffSystem 의 활성 버프를 buff id 로 합친다.
-
-        _buffLink 와 _cannotBeDispelled 가 전체 집합이다 (게임의 GetBuffLevel 도 이 둘만 합산).
-        반환: {buff id: {ca, stacks(Level 합), instances, left(영구면 None, 아니면 최대 남은 프레임)}}"""
+        """BuffSystem 의 활성 버프를 buff id 로 합친다."""
         head = self.read(system, 0x38)
         if head is None:
             return {}
@@ -1119,7 +1092,7 @@ def pick_card_slot(slots, party, level_id=None, weights=None):
 
 
 def use_type_label(names, card_id, use_type):
-    """사용 방식 숫자의 뜻. web/app.js useOptions 와 같은 규칙이다."""
+    """사용 방식 숫자의 뜻."""
     if card_id == DISCARD_CARD:
         return DISCARD_LABELS.get(use_type)
     if use_type == 1:
@@ -1293,10 +1266,7 @@ def parse_battle_tokens(raw):
 
 
 def resonance_spec(names, role_id, unit, tokens):
-    """공명 강화. 게임이 전투에 넘긴 값에서 되짚는다 (GetRoleResonanceExSkillStr, GetRoleSkillLevel). 반환: (목록, 쓴 조각 id).
-
-    속성 강화와 skillActiveUpgrade 가 없는 스킬 강화는 extraSkills 에, 있는 스킬 강화는 skill1~3Lv (강화 레벨 + 1) 에 들어간다.
-    """
+    """공명 강화. 게임이 전투에 넘긴 값에서 되짚는다 (GetRoleResonanceExSkillStr, GetRoleSkillLevel). 반환: (목록, 쓴 조각 id)."""
     values = dict(tokens)
     used = set()
     skill_levels = [unit["skill1Lv"], unit["skill2Lv"], unit["skill3Lv"]]
@@ -1486,7 +1456,6 @@ def lineup_view(spec):
     source = auto.get("source") or {}
     team = []
     for member in spec.get("team") or []:
-        # enabledInTeamPreset 은 specVersion 1 기록에만 있다
         equips = [{"id": e.get("id"), "name": e.get("name"), "lv": e.get("level")} if e and e.get("enabledInTeamPreset") is not False else None
                   for e in (member.get("equips") or [])[:EQUIP_SLOTS]]
         equips += [None] * (EQUIP_SLOTS - len(equips))
@@ -1527,10 +1496,7 @@ def last_window(flow, seconds):
 
 
 def estimate_used_cost(flow, cards):
-    """결과 화면 '사용한 비용' 추정: 카드를 쓰기 직전 손패 표본에서 읽은 비용의 합.
-
-    게임은 카드마다 지불 비용을 더한다. 같은 순간 돌려받은 비용이 막대에는 안 보이므로 막대 순감소보다 크다.
-    손패 표본의 비용은 근사값이고, 표본에 없던 카드(리더 제외)는 빼고 그 장수를 함께 돌려준다."""
+    """결과 화면 '사용한 비용' 추정: 카드를 쓰기 직전 손패 표본에서 읽은 비용의 합."""
     total, unknown, at = 0, 0, 0
     if not flow:
         return 0, 0
@@ -1643,7 +1609,7 @@ class Meter:
         self.reader = None
         self.status = "게임을 찾는 중"
         self.error = ""
-        self.armed = True  # 측정 대기: 켜져 있는 동안 시작되는 전투만 기록한다. 켜면 바로 대기 (2026-11-16 — 그 전엔 꺼진 채 시작)
+        self.armed = True  # 켜져 있는 동안 시작되는 전투만 기록한다
         self.halted = False
         self.errors = 0
         self.pid_checked = 0.0
@@ -1761,7 +1727,7 @@ class Meter:
             "schemaVersion": SCHEMA_VERSION, "id": int(now * 1000), "server": SERVER, "build": reader.build(),
             "started": now, "ended": None, "live": True,
             "endReason": None, "game_duration": None, "pollHz": POLL_HZ,
-            "timeBase": "frame/60",  # 게임 타이머 기준. 시뮬 시각+3초≈게임 시각
+            "timeBase": "frame/60",  # 게임 타이머 기준
             "attrsUnit": "SN=값x10000", "startFrame": ctx.frame, "frame": ctx.frame, "state": ctx.state,
             "firstHitFrame": None, "first_hit": None, "last_hit": None, "gameTotalSN": 0,
             "conditions": {"leaderCardId": None, "leaderCard": None, "roleOrder": []},
@@ -1769,10 +1735,6 @@ class Meter:
             "ledger": {"openingSN": 0, "naturalSN": 0, "startSN": 0, "gainedSN": 0, "spentSN": 0, "otherSpentSN": 0,
                        "overflowSN": 0, "capFrames": 0, "frames": 0, "pendingSN": 0, "currentSN": 0},
             "flow": [], "leaderProgress": [], "units": {}, "buffEvents": [], "snapshots": [], "ops": [], "now": None,
-            # hits: [프레임, 캐릭터 id, 그 프레임의 피해 증가, 그중 카드에 귀속된 양]
-            # actions: [시작 프레임, 유닛 키, 동작 id, 카드 id, 플래그(1 일반 공격, 2 리더 스킬), 전체 프레임,
-            #           처음 본 진행 프레임, 마지막으로 진행한 프레임, 마지막 진행 프레임 값]
-            # dotTicks: [프레임, buff id, 건 캐릭터 id, 인스턴스, 틱 수] — 적에게 걸린 아군의 주기 효과가 틱을 낸 프레임
             "hits": [], "actions": [], "dotTicks": [],
             "summary": None, "metrics": {},
             "spec": None,  # 목록은 파일 앞부분만 읽으므로 긴 필드는 뒤에 둔다
@@ -2055,10 +2017,7 @@ class Meter:
                 state["row"][7], state["row"][8] = frame, progress
 
     def apply_dots(self, ctx, frame):
-        """적에게 걸린 아군의 주기 효과가 낸 틱을 기록한다.
-
-        BuffDot 의 프레임 카운터는 0 → 간격-1 까지 오르고 틱을 내는 프레임에 0 으로 돌아간다 (2026-11-09 실측: 59 → 0).
-        같은 효과를 다시 걸어 카운터가 중간에 처음부터 다시 시작한 경우(예: 47 → 1)는 틱이 아니다."""
+        """적에게 걸린 아군의 주기 효과가 낸 틱을 기록한다."""
         cur, reader, states = self.current, self.reader, self.dot_state
         units = self._live_units(ctx)
         allies = {unit["sid"]: unit["id"] for unit in units if unit["key"] != "team" and unit["team"] == ALLY_TEAM}
@@ -2219,7 +2178,7 @@ class Meter:
                 self.current["leaderProgress"].append([frame, *state])
 
     def sample_flow(self, ctx, snap, frame, team, system):
-        """0.1초 표본. 앞 8칸은 시뮬 타임라인과 같은 순서다."""
+        """0.1초 표본."""
         cur, reader, names = self.current, self.reader, self.names
         hand = [[names.skill(c["id"], c["name"]), cost_units(c["cost"]), c["id"]]
                 for c in reader.hand_cards(u64_at(system, 0x80), reader.dict_int_long(ctx.adjust_cost))]
@@ -2366,9 +2325,7 @@ class Meter:
         self._save(cur, path)
 
     def delete_battle(self, battle_id):
-        """끝난 전투 하나를 목록과 기록 폴더에서 지운다. 진행 중인 전투는 지우지 않는다.
-
-        파일이 이미 없어도 목록에서는 빼서, 폴더에서 직접 지운 기록도 이 버튼으로 정리할 수 있게 한다."""
+        """끝난 전투 하나를 목록과 기록 폴더에서 지운다. 진행 중인 전투는 지우지 않는다."""
         with self.lock:
             if self.current and str(self.current["id"]) == battle_id:
                 return False
@@ -2525,7 +2482,7 @@ class Meter:
         return [[round(e[0] / 60, 2), stats[str(e[2])]["label"], e[3], e[4], e[5]] for e in reversed(picked)]
 
     def _battle_view(self, battle, unit):
-        # spec 은 AI 모델용 세부 스펙이다. 화면에는 lineup 에 고른 값만 보낸다. setup 은 옛 기록에만 있다.
+        # 화면에는 lineup 에 고른 값만 보낸다.
         hidden = ("flow", "buffEvents", "snapshots", "byRole", "units", "setup", "spec", "ops", "hits", "actions", "dotTicks")
         view = {key: value for key, value in battle.items() if key not in hidden}
         skills = {}
@@ -2548,9 +2505,7 @@ class Meter:
         return view
 
     def view(self, battle_id="", unit="", listing=False):
-        """화면용 응답을 UTF-8 JSON 바이트로 돌려준다. 직렬화까지 잠금 안에서 끝낸다.
-
-        listing 이면 메인 화면용 전투 목록만 담고, 전투를 지정하면 그 전투 본문만 담는다."""
+        """화면용 응답을 UTF-8 JSON 바이트로 돌려준다. 직렬화까지 잠금 안에서 끝낸다."""
         body = None if listing else self._find_battle(battle_id)
         with self.lock:
             battles = []
