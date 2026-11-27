@@ -185,7 +185,7 @@ def use_server(server):
 STATE_NAMES = {4: "전투 중", 3: "전투 시작 대기", 5: "대열 정비", 6: "팀 카드 선택", 7: "이동 중",
                8: "승리 연출", 1: "전투 종료"}
 
-SCHEMA_VERSION = 5  # 3: cards[].target/pos/ai, ops, snapshots 유닛 pos 추가. 4: 게임 프레임마다 표본, hits/actions/dotTicks 추가. 5: server(서버 번호)·build(게임 빌드) 추가
+SCHEMA_VERSION = 6  # 3: cards[].target/pos/ai, ops, snapshots 유닛 pos 추가. 4: 게임 프레임마다 표본, hits/actions/dotTicks 추가. 5: server(서버 번호)·build(게임 빌드) 추가
 POLL_HZ = 60  # 게임 프레임(초당 60)이 바뀔 때마다 한 번 읽는다
 FRAME_SLEEP = 0.002  # 프레임이 바뀌었는지 보는 간격
 RECHECK_SECONDS = 0.05  # 프레임이 멈춰 있을 때(일시정지·종료 직후) 다시 읽는 간격
@@ -238,6 +238,10 @@ ALLY_TEAM = 1
 DISCARD_CARD = 10600474
 DISCARD_OWNER = 10000001
 FIRST_WEIGHT, STEP_WEIGHT, BAN_WEIGHT = 900000, 10000, -9999999
+LEADER_COND, LEADER_WEIGHT, SP_COND, SP_WEIGHT = 96200022, 1200000, 96200021, 1100000
+OTHER_COND, OTHER_WEIGHTS, KEEP_COND = 96200025, {999999: 0, -999999: 2}, 96200010
+DISCARD_ACTION, DISCARD_ALWAYS_COND, DISCARD_DEFAULT_COND = 96300006, 96200034, 96200016
+VALUE_CONDITIONS = {"CardAIConditionKeepCards", "CardAIConditionKeepCosts", "CardAIConditionTeamAttribute"}
 DISCARD_LABELS = {1: "항상 (순위대로)", 2: "사용 안 함", 3: "쓸 수 있는 카드가 없을 때", 4: "순위가 높은 카드가 없을 때"}
 # 게임이 전투에 펫 능력치를 넣는 칸: (장비 칸, 옵션 칸) → 옵션 id. 그 장비의 추가 옵션 대신 들어간다.
 PET_SLOTS = {(0, 4): 12300776, (0, 5): 12300777, (1, 5): 12300771}
@@ -414,6 +418,7 @@ class Reader:
         """전투가 시작될 때마다 비운다 (이전 전투의 포인터가 재사용될 수 있다)."""
         self.strings, self.buff_cas, self.card_cas, self.unit_cas, self.leader_maxes = {}, {}, {}, {}, {}
         self.ca_ids, self.product_ids = {}, {}
+        self.class_names = {}
 
     def _module_base(self, wanted):
         mods = (W.HMODULE * 4096)()
@@ -797,6 +802,53 @@ class Reader:
         ca = self.card_ca(self.u64(card + 0x108)) if card else None
         return {"actionValue": i32_at(raw, 0xB8), "cardId": ca[0] if ca else None,
                 "blackboard": self.dict_str_int(u64_at(raw, 0x60))}
+
+    def class_name(self, obj):
+        klass = self.u64(obj) if obj else 0
+        if not klass:
+            return ""
+        cached = self.class_names.get(klass)
+        if cached is None:
+            name_ptr = self.u64(klass + 0x10)
+            raw = self.read(name_ptr, 64) if name_ptr else None
+            cached = self.class_names[klass] = raw.split(b"\0")[0].decode("ascii", "replace") if raw else ""
+        return cached
+
+    def struct_items(self, ptr, size):
+        head = self.read(ptr, 0x20) if ptr else None
+        if head is None:
+            return []
+        items, count = struct.unpack_from("<Qi", head, 0x10)
+        if not 0 <= count <= MAX_LIST or not items:
+            return []
+        data = self.read(items + 0x20, count * size) if count else b""
+        return [data[i * size:(i + 1) * size] for i in range(count)] if data is not None else []
+
+    def condition(self, ptr):
+        if not ptr:
+            return [0, None]
+        raw = self.read(ptr, 0x64)
+        if raw is None:
+            return [0, None]
+        ca = self.read(u64_at(raw, 0x38), 0x20)
+        value = i32_at(raw, 0x60) if self.class_name(ptr) in VALUE_CONDITIONS else None
+        return [i32_at(ca, 0x18) if ca else 0, value]
+
+    def ai_settings(self, ai_core):
+        raw = self.read(ai_core, 0xF0) if ai_core else None
+        if raw is None:
+            return None
+        unit = lambda b: self.condition(u64_at(b, 0)) + [i32_at(b, 8)]
+        return {
+            "weights": self.dict_int_int(u64_at(raw, 0xD8)),
+            "conds": {key: [unit(b) for b in self.struct_items(ptr, 16)] for key, ptr in self.dict_int_refs(u64_at(raw, 0xE0))},
+            "replace": {key: [list(struct.unpack_from("<iiii", b, 0)) for b in self.struct_items(ptr, 16)]
+                        for key, ptr in self.dict_int_refs(u64_at(raw, 0xE8))},
+            "adjust": [unit(b) for b in self.struct_items(u64_at(raw, 0x98), 16)],
+            "avail": [self.condition(ptr) for ptr in self.list_items(u64_at(raw, 0x88))],
+            "actions": [[self.product_id(u64_at(b, 0x10))] + self.condition(u64_at(b, 8)) + [i32_at(b, 0)]
+                        for b in self.struct_items(u64_at(raw, 0xC8), 24)],
+        }
 
     def card_order(self, ptr, start):
         """cardOrder (List<RecordCardInfo>) 의 start 번째부터의 새 항목.
@@ -1219,6 +1271,8 @@ def expected_weights(card_list):
     out = {}
     for index, card in enumerate(card_list):
         card_id = int(card["id"])
+        if card_id == DISCARD_CARD and card.get("useType", 1) == 2:
+            continue
         banned = card_id != DISCARD_CARD and card.get("useType", 1) == 2
         out[card_id] = BAN_WEIGHT if banned else FIRST_WEIGHT - STEP_WEIGHT * index
     return out
@@ -1277,6 +1331,108 @@ def use_type_label(names, card_id, use_type):
     return None
 
 
+def card_owner_skill(names, card_id, party):
+    owner = names.owner(card_id, party)
+    if owner is None:
+        return DISCARD_OWNER, None, None
+    for index, row in enumerate((names.records.get(owner) or {}).get("skillList") or [], 1):
+        card = (names.records.get(str(row.get("skillId"))) or {}).get("cardID")
+        links = [x.get("Id") for x in (names.records.get(str(card)) or {}).get("linkCardId") or [] if isinstance(x, dict)]
+        if card == card_id or card_id in links:
+            return int(owner), row.get("skillId"), index
+    direct = [int(key) for key, record in names.records.items() if record.get("cardID") == card_id]
+    return int(owner), direct[0] if direct else None, None
+
+
+def memory_auto_set(names, settings, party, leader):
+    weights = {int(k): v for k, v in (settings.get("weights") or {}).items()}
+    if not weights:
+        return None, ["weights"]
+    conds = {int(k): v for k, v in (settings.get("conds") or {}).items()}
+    replace = {int(k): v for k, v in (settings.get("replace") or {}).items()}
+    unknown = ["discardType"]
+    links = set()
+    for card_id in weights:
+        for link in (names.records.get(str(card_id)) or {}).get("linkCardId") or []:
+            if isinstance(link, dict) and link.get("Id") != card_id:
+                links.add(link.get("Id"))
+    ranked, banned = {}, []
+    for card_id, weight in weights.items():
+        if card_id in links:
+            continue
+        if weight == BAN_WEIGHT:
+            banned.append(card_id)
+        elif weight <= FIRST_WEIGHT and (FIRST_WEIGHT - weight) % STEP_WEIGHT == 0 and (FIRST_WEIGHT - weight) // STEP_WEIGHT not in ranked:
+            ranked[(FIRST_WEIGHT - weight) // STEP_WEIGHT] = card_id
+        else:
+            unknown.append(f"weight:{card_id}")
+    order, banned = [], sorted(banned)
+    discard_gap = DISCARD_CARD not in weights
+    for index in range(max(ranked) + 1 if ranked else 0):
+        if index in ranked:
+            order.append(ranked[index])
+        elif discard_gap:
+            order.append(DISCARD_CARD)
+            discard_gap = False
+        elif banned:
+            order.append(banned.pop(0))
+        else:
+            unknown.append(f"gap:{index}")
+    order += banned
+    cards = []
+    for card_id in order:
+        record = names.records.get(str(card_id)) or {}
+        conditions, actions = record.get("ExCondList") or [], record.get("ExActList") or []
+        use_type, use_param = (2 if weights.get(card_id, BAN_WEIGHT) == BAN_WEIGHT else 1), -1
+        if card_id == DISCARD_CARD:
+            owner, skill, skill_index = DISCARD_OWNER, record.get("skillId"), None
+            for action, cond, _value, weight in settings.get("actions") or []:
+                if action == DISCARD_ACTION and weight == weights.get(card_id) and cond != DISCARD_ALWAYS_COND:
+                    hits = [i for i, c in enumerate(conditions) if c.get("condId") == cond or (cond == DISCARD_DEFAULT_COND and (c.get("condId") or 0) <= 0)]
+                    use_type = 3 + hits[0] if hits else use_type
+                    unknown += [] if hits else [f"discardCond:{cond}"]
+        else:
+            owner, skill, skill_index = card_owner_skill(names, card_id, party)
+            for cond, value, _weight in conds.get(card_id) or []:
+                hits = [i for i, c in enumerate(conditions) if c.get("condId") == cond]
+                if not hits:
+                    unknown.append(f"cond:{card_id}:{cond}")
+                    continue
+                use_type = 3 + hits[0]
+                if value is not None:
+                    use_param = round(value / 100) if conditions[hits[0]].get("typeEnum") == "percent" else value
+            for _weight, _cond, action, param in replace.get(card_id) or []:
+                hits = [i for i, c in enumerate(actions) if c.get("condId") == action]
+                if not hits:
+                    unknown.append(f"action:{card_id}:{action}")
+                    continue
+                use_type, use_param = 3 + len(conditions) + hits[0], param
+        cards.append({"id": str(card_id), "ownerId": owner, "skillId": skill, "skillIndex": skill_index,
+                      "useType": use_type, "useParam": use_param, "targetType": 0, "equipIdList": []})
+    adjust = {(cond, weight) for cond, _value, weight in settings.get("adjust") or []}
+    other = [OTHER_WEIGHTS[w] for c, w in adjust if c == OTHER_COND and w in OTHER_WEIGHTS]
+    keep = [value for cond, value in settings.get("avail") or [] if cond == KEEP_COND]
+    decoded = {"cardList": cards, "header": leader or (party[0] if party else None), "roleList": list(party),
+               "isLeaderCardOn": (LEADER_COND, LEADER_WEIGHT) in adjust, "isSpCardOn": (SP_COND, SP_WEIGHT) in adjust,
+               "otherCard": other[0] if other else 1, "keepCardNum": 0 if not keep or keep[0] in (None, -1) else keep[0],
+               "discardType": None}
+    if not keep:
+        unknown.append("keepCardNum")
+    return decoded, unknown
+
+
+def compare_auto_sets(registry, memory):
+    diffs = [key for key in ("isLeaderCardOn", "isSpCardOn", "otherCard", "keepCardNum") if registry.get(key) != memory.get(key)]
+    pick = lambda d: [(int(c["id"]), c.get("useType", 1), c.get("useParam", -1) if c.get("useType", 1) > 2 else -1)
+                      for c in d.get("cardList") or [] if c.get("useType", 1) != 2]
+    if pick(registry) != pick(memory):
+        diffs.append("cardList")
+    ban = lambda d: sorted(int(c["id"]) for c in d.get("cardList") or [] if c.get("useType", 1) == 2)
+    if ban(registry) != ban(memory):
+        diffs.append("banned")
+    return diffs
+
+
 def auto_use_spec(names, state, party, leader, level_id, warnings):
     """spec.autoUse. code 는 게임의 클립보드 내보내기와 같은 형식의 문자열이다."""
     flags = state.flags or {}
@@ -1288,15 +1444,35 @@ def auto_use_spec(names, state, party, leader, level_id, warnings):
            "registryBanFlag": flags.get("CardAIBan"), "code": None, "decoded": None, "cards": [],
            "source": {"from": None, "slot": None, "matchedBy": None, "readAt": "전투 시작 (게임이 자동 사용 설정을 저장한 뒤의 값)",
                       "changedDuringBattle": state.slot_changed, "weightCheck": None}}
+    memory, unknown = memory_auto_set(names, state.ai_settings, party, leader) if state.ai_settings else (None, ["ai_settings"])
+    out["memory"] = {"decoded": memory, "unknown": unknown, "matchesRegistry": None, "diffs": None, "raw": state.ai_settings}
+
+    def from_memory(why):
+        if memory is None:
+            warnings.append(f"이번 파티에 맞는 자동 사용 슬롯을 확정하지 못했고({why}) 전투 메모리의 카드 AI 설정도 읽지 못했습니다. 코드는 비워 둡니다.")
+            return out
+        export = {k: v for k, v in memory.items() if v is not None}
+        out.update({"code": encode_code(export), "decoded": memory})
+        out["source"].update({"from": "memory"})
+        for rank, card in enumerate(memory["cardList"], 1):
+            card_id = int(card["id"])
+            out["cards"].append({"rank": rank, "id": card_id, "name": names.skill(card_id, ""), "ownerId": card["ownerId"],
+                                 "ownerName": names.roster.get(card["ownerId"]) if card["ownerId"] != DISCARD_OWNER else None,
+                                 "skillId": card["skillId"], "skillIndex": card["skillIndex"], "useType": card["useType"],
+                                 "useTypeLabel": use_type_label(names, card_id, card["useType"]), "useParam": card["useParam"],
+                                 "useParamMap": None, "targetType": 0, "equipIdList": [], "isDiscardEntry": card_id == DISCARD_CARD,
+                                 "expectedWeight": (state.weights or {}).get(card_id)})
+        warnings.append(f"레지스트리 슬롯을 확정하지 못해({why}) 전투 메모리의 카드 AI 설정으로 코드를 만들었습니다. 버리기 방식(discardType)과 사용 안 함 카드의 순위는 메모리에 없어 비우거나 뒤로 둡니다.")
+        return out
+
     if state.slots is None:
         out["source"]["matchedBy"] = "registry-unreadable"
         warnings.append("레지스트리에서 자동 사용 설정을 읽지 못했습니다" + (f": {state.prefs_error}" if state.prefs_error else ""))
-        return out
+        return from_memory("registry-unreadable")
     key, slot, why = pick_card_slot(state.slots, party, level_id, state.weights)
     out["source"]["matchedBy"] = why
     if slot is None:
-        warnings.append(f"이번 파티에 맞는 자동 사용 슬롯을 확정하지 못했습니다 ({why}). 코드는 비워 둡니다.")
-        return out
+        return from_memory(why)
     state.slot_key = key
     data = slot["data"]
     export = json.loads(slot["text"])
@@ -1312,6 +1488,9 @@ def auto_use_spec(names, state, party, leader, level_id, warnings):
     weights = expected_weights(cards)
     out["code"] = encode_code(export)
     out["decoded"] = export
+    if memory is not None:
+        diffs = compare_auto_sets(export, memory)
+        out["memory"].update({"matchesRegistry": not diffs, "diffs": diffs})
     out["source"].update({"from": "registry", "slot": key})
     for rank, card in enumerate(cards, 1):
         card_id, owner = int(card["id"]), card.get("ownerId")
@@ -1591,7 +1770,7 @@ def compose_spec(names, state, battle):
         "team": "memory:Replay.UnitInfo (이번 전투)" if replay else "없음",
         "resonanceEnhance": "memory:UnitInfo.extraSkills, skill1~3Lv" if replay else "없음",
         "attrsAtStartSN": "memory:Unit.Property" if state.attrs else "없음",
-        "autoUse": "registry:PlayerPrefs + memory:CardAICore 대조",
+        "autoUse": "registry:PlayerPrefs + memory:CardAICore 대조 (슬롯을 못 고르면 memory:CardAICore 로 되짚음)",
         "names": "web/data/game.js",
     }
     return {
@@ -1614,7 +1793,7 @@ def new_spec_state():
     """전투 하나의 세부 스펙 수집 상태."""
     return types.SimpleNamespace(
         slots=None, flags=None, prefs_error=None, slot_key=None, slot_changed=False,
-        replay=None, replay_error=None, weights=None, attrs=None, attrs_complete=False, attrs_frame=None, team_attrs=None,
+        replay=None, replay_error=None, weights=None, ai_settings=None, attrs=None, attrs_complete=False, attrs_frame=None, team_attrs=None,
         ai_last=None, ai_ever=False, ticks=0, memory_done=False)
 
 
@@ -1982,7 +2161,8 @@ class Meter:
         if state.replay is None:
             state.replay, state.replay_error = reader.replay_info(ctx.replay_manager)
         if not state.weights and ctx.ai_core:
-            state.weights = reader.dict_int_int(reader.u64(ctx.ai_core + 0xD8)) or None
+            state.ai_settings = reader.ai_settings(ctx.ai_core)
+            state.weights = (state.ai_settings or {}).get("weights") or None
         if state.attrs_complete or ctx.state != STATE_FIGHTING:
             return
         party = {u["id"] for u in state.replay["units"]} if state.replay else {int(k) for k in self.current["roles"] if str(k).isdigit()}
