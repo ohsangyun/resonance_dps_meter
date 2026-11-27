@@ -74,11 +74,13 @@ def asset_dir(*parts):
 
 GAME_DATA = ROOT / "web" / "data" / "game.js"
 ROSTER_DATA = ROOT / "data" / "kr_roster.json"
+EXTRA_DATA = HERE / "extra_names.json"
 DEFAULT_LOG_DIR = HERE / "logs"
 ICON_FILE = HERE / "icon.png"
 PORTRAIT_DIR = asset_dir("web", "img", "unit")
 PORTRAIT_PATH = re.compile(r"/unit/([0-9]{1,12})\.webp")
 EQUIP_ICON_DIR = asset_dir("web", "img", "equip")
+EXTRA_IMAGE_DIR = HERE / "img"
 EQUIP_ICON_PATH = re.compile(r"/equip/([0-9]{1,12})\.webp")
 APPDIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ResonanceDpsMeter"
 # 자료 묶음 (2026-11-23): 배포 묶음은 초상화·장비 아이콘과 이름 자료(game.js·kr_roster.json)를 폴더 대신 파일 하나(assets.pak)에 가려서 넣는다
@@ -1034,6 +1036,27 @@ class Names:
             self.zh_names = sorted(pairs.items(), key=lambda kv: -len(kv[0]))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print("캐릭터 목록을 읽지 못했습니다:", exc, file=sys.stderr)
+        try:
+            extra = json.loads(read_data(EXTRA_DATA, "data/extra_names.json"))
+            for r in extra.get("roster", []):
+                self.roster.setdefault(r["id"], r["name"])
+            for key, record in (extra.get("records") or {}).items():
+                self.records.setdefault(key, record)
+            for key, nodes in (extra.get("reso") or {}).items():
+                self.reso.setdefault(key, nodes)
+            extra_equip = extra.get("equip") or {}
+            for item in extra_equip.get("items") or []:
+                self.equip_items.setdefault(int(item["id"]), item)
+            for key, info in (extra_equip.get("affix") or {}).items():
+                self.affixes.setdefault(key, info)
+            for zh, name in (extra.get("kr") or {}).items():
+                self.kr.setdefault(zh, name)
+            pairs = dict(self.zh_names)
+            for r in extra.get("roster", []):
+                pairs.setdefault(r["zh"], r["name"])
+            self.zh_names = sorted(pairs.items(), key=lambda kv: -len(kv[0]))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print("보충 이름 자료를 읽지 못했습니다:", exc, file=sys.stderr)
 
     def role(self, key, name):
         return self.roster.get(key) or self.kr.get(name) or name or str(key)
@@ -2780,6 +2803,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(data, "image/webp", cache="max-age=86400") if data else self._send(b"not found", "text/plain", 404)
         image = (ICON_FILE if url.path == "/icon.png" else PORTRAIT_DIR / f"{portrait.group(1)}.webp" if portrait
                  else EQUIP_ICON_DIR / f"{equip.group(1)}.webp" if equip else None)
+        if image and not image.is_file() and (portrait or equip):
+            image = EXTRA_IMAGE_DIR / ("unit" if portrait else "equip") / image.name
         if image and image.is_file():
             return self._send(image.read_bytes(), "image/png" if image == ICON_FILE else "image/webp", cache="max-age=86400")
         return self._send(b"not found", "text/plain", 404)
