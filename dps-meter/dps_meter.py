@@ -1289,8 +1289,10 @@ def pick_card_slot(slots, party, level_id=None, weights=None):
         rows.append((key, slot, owners, roles))
     level_key = f"LevelRoleList_{level_id}"
     if weights:  # 전투 중 실제 AI 가중치와 전부 일치하면 그것이 답이다
+        ranks = {v for v in weights.values() if v != BAN_WEIGHT}
         exact = [row for row in rows if row[2] <= party_set
-                 and all(weights.get(k) == v for k, v in expected_weights(row[1]["data"]["cardList"]).items())]
+                 and all(weights.get(k) == v for k, v in expected_weights(row[1]["data"]["cardList"]).items())
+                 and {v for v in expected_weights(row[1]["data"]["cardList"]).values() if v != BAN_WEIGHT} == ranks]
         if exact:
             # 카드가 적은 슬롯은 앞부분만 우연히 같을 수 있다
             exact.sort(key=lambda row: (-len(row[1]["data"]["cardList"]), row[0] != level_key, row[3] != party_set))
@@ -1354,7 +1356,7 @@ def memory_auto_set(names, settings, party, leader):
     links = set()
     for card_id in weights:
         for link in (names.records.get(str(card_id)) or {}).get("linkCardId") or []:
-            if isinstance(link, dict) and link.get("Id") != card_id:
+            if isinstance(link, dict) and link.get("Id") != card_id and weights.get(link.get("Id")) == weights[card_id]:
                 links.add(link.get("Id"))
     ranked, banned = {}, []
     for card_id, weight in weights.items():
@@ -1444,10 +1446,13 @@ def auto_use_spec(names, state, party, leader, level_id, warnings):
            "registryBanFlag": flags.get("CardAIBan"), "code": None, "decoded": None, "cards": [],
            "source": {"from": None, "slot": None, "matchedBy": None, "readAt": "전투 시작 (게임이 자동 사용 설정을 저장한 뒤의 값)",
                       "changedDuringBattle": state.slot_changed, "weightCheck": None}}
-    memory, unknown = memory_auto_set(names, state.ai_settings, party, leader) if state.ai_settings else (None, ["ai_settings"])
-    out["memory"] = {"decoded": memory, "unknown": unknown, "matchesRegistry": None, "diffs": None, "raw": state.ai_settings}
+    settings = state.ai_settings or state.ai_pending
+    memory, unknown = memory_auto_set(names, settings, party, leader) if settings else (None, ["ai_settings"])
+    if memory is not None and not state.ai_settings:
+        unknown.append("unconfirmed")
+    out["memory"] = {"decoded": memory, "unknown": unknown, "matchesRegistry": None, "diffs": None, "raw": settings}
 
-    def from_memory(why):
+    def from_memory(why, quiet=False):
         if memory is None:
             warnings.append(f"이번 파티에 맞는 자동 사용 슬롯을 확정하지 못했고({why}) 전투 메모리의 카드 AI 설정도 읽지 못했습니다. 코드는 비워 둡니다.")
             return out
@@ -1462,14 +1467,20 @@ def auto_use_spec(names, state, party, leader, level_id, warnings):
                                  "useTypeLabel": use_type_label(names, card_id, card["useType"]), "useParam": card["useParam"],
                                  "useParamMap": None, "targetType": 0, "equipIdList": [], "isDiscardEntry": card_id == DISCARD_CARD,
                                  "expectedWeight": (state.weights or {}).get(card_id)})
-        warnings.append(f"레지스트리 슬롯을 확정하지 못해({why}) 전투 메모리의 카드 AI 설정으로 코드를 만들었습니다. 버리기 방식(discardType)과 사용 안 함 카드의 순위는 메모리에 없어 비우거나 뒤로 둡니다.")
+        if not quiet:
+            warnings.append(f"레지스트리 슬롯을 확정하지 못해({why}) 전투 메모리의 카드 AI 설정으로 코드를 만들었습니다. 버리기 방식(discardType)과 사용 안 함 카드의 순위는 메모리에 없어 비우거나 뒤로 둡니다.")
         return out
 
     if state.slots is None:
         out["source"]["matchedBy"] = "registry-unreadable"
         warnings.append("레지스트리에서 자동 사용 설정을 읽지 못했습니다" + (f": {state.prefs_error}" if state.prefs_error else ""))
         return from_memory("registry-unreadable")
-    key, slot, why = pick_card_slot(state.slots, party, level_id, state.weights)
+    same = sorted(((k, sl) for k, sl in state.slots.items() if memory is not None and not compare_auto_sets(sl["data"], memory)),
+                  key=lambda row: (row[0] != f"LevelRoleList_{level_id}", set(row[1]["data"].get("roleList") or []) != set(party), row[0]))
+    if same:
+        key, slot, why = same[0][0], same[0][1], "memory" if len(same) == 1 else f"memory-tie:{len(same)}"
+    else:
+        key, slot, why = pick_card_slot(state.slots, party, level_id, state.weights)
     out["source"]["matchedBy"] = why
     if slot is None:
         return from_memory(why)
@@ -1491,6 +1502,12 @@ def auto_use_spec(names, state, party, leader, level_id, warnings):
     if memory is not None:
         diffs = compare_auto_sets(export, memory)
         out["memory"].update({"matchesRegistry": not diffs, "diffs": diffs})
+        if diffs:
+            out.update({"code": None, "decoded": None})
+            from_memory(why, quiet=True)
+            out["source"]["slot"] = key
+            warnings.append(f"레지스트리 슬롯 {key} 가 전투 메모리의 카드 AI 설정과 달라({', '.join(diffs)}) 메모리 쪽으로 코드를 만들었습니다. 게임이 클라우드 설정이나 다른 슬롯을 썼을 수 있습니다.")
+            return out
     out["source"].update({"from": "registry", "slot": key})
     for rank, card in enumerate(cards, 1):
         card_id, owner = int(card["id"]), card.get("ownerId")
@@ -1500,7 +1517,7 @@ def auto_use_spec(names, state, party, leader, level_id, warnings):
             "skillIndex": card.get("skillIndex"), "useType": card.get("useType"),
             "useTypeLabel": use_type_label(names, card_id, card.get("useType")), "useParam": card.get("useParam"),
             "useParamMap": card.get("useParamMap"), "targetType": card.get("targetType"), "equipIdList": card.get("equipIdList"),
-            "isDiscardEntry": card_id == DISCARD_CARD, "expectedWeight": weights[card_id]})
+            "isDiscardEntry": card_id == DISCARD_CARD, "expectedWeight": weights.get(card_id)})
     if state.weights:
         wrong = [k for k, v in weights.items() if state.weights.get(k) != v]
         out["source"]["weightCheck"] = {"cards": len(weights), "mismatch": len(wrong), "mismatchIds": wrong[:20]}
@@ -1793,7 +1810,7 @@ def new_spec_state():
     """전투 하나의 세부 스펙 수집 상태."""
     return types.SimpleNamespace(
         slots=None, flags=None, prefs_error=None, slot_key=None, slot_changed=False,
-        replay=None, replay_error=None, weights=None, ai_settings=None, attrs=None, attrs_complete=False, attrs_frame=None, team_attrs=None,
+        replay=None, replay_error=None, weights=None, ai_settings=None, ai_pending=None, attrs=None, attrs_complete=False, attrs_frame=None, team_attrs=None,
         ai_last=None, ai_ever=False, ticks=0, memory_done=False)
 
 
@@ -2161,8 +2178,10 @@ class Meter:
         if state.replay is None:
             state.replay, state.replay_error = reader.replay_info(ctx.replay_manager)
         if not state.weights and ctx.ai_core:
-            state.ai_settings = reader.ai_settings(ctx.ai_core)
-            state.weights = (state.ai_settings or {}).get("weights") or None
+            settings = reader.ai_settings(ctx.ai_core)
+            if settings and settings.get("weights") and settings == state.ai_pending:
+                state.ai_settings, state.weights = settings, settings["weights"]
+            state.ai_pending = settings
         if state.attrs_complete or ctx.state != STATE_FIGHTING:
             return
         party = {u["id"] for u in state.replay["units"]} if state.replay else {int(k) for k in self.current["roles"] if str(k).isdigit()}
