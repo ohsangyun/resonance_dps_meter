@@ -33,7 +33,6 @@ header { padding:9px 11px 8px; background:var(--panel); border-bottom:1px solid 
 #home { flex:none; padding:1px 6px; font-size:12px; }
 .home .hero, .home #spark, .home nav, .home #crumb, .home #home { display:none; }
 .items { display:flex; flex-direction:column; gap:4px; }
-/* 한 줄 = 카드(.entry) 안에 열기 버튼(.item)과 삭제 버튼(.del)이 나란히 들어간다 */
 .entry { display:flex; align-items:center; min-width:0; background:linear-gradient(180deg,#2a313c,#1e232b); border:1px solid #3d4655; border-radius:6px; box-shadow:inset 0 1px 0 rgba(255,255,255,.08),inset 0 0 0 1px rgba(0,0,0,.28),0 1px 2px rgba(0,0,0,.4); transition:border-color .12s, background .12s; }
 .entry:hover { background:linear-gradient(180deg,#323a47,#232933); border-color:var(--bar); }
 .entry.live { border-color:var(--good); }
@@ -64,7 +63,6 @@ button.del:active { background:rgba(242,131,122,.24); }
 #spark { display:flex; align-items:flex-end; gap:1px; height:34px; margin-top:7px; }
 #spark i { flex:1; min-width:1px; background:var(--bar); opacity:.85; border-radius:1px 1px 0 0; }
 nav { display:flex; gap:1px; padding:5px 7px 0; }
-/* 서버 전송: 평소엔 차분하게, 올리면 무지개빛으로 흐르며 빛난다 */
 #send { display:inline-flex; align-items:center; gap:4px; margin:0 0 3px auto; padding:2px 9px; color:var(--ink2); background:var(--row); border:1px solid var(--line); border-radius:999px; font-size:12px; transition:color .15s, border-color .15s, transform .15s; }
 #send svg { width:13px; height:13px; flex:none; }
 #send:hover:not(:disabled), #send:focus-visible { color:#fff; border-color:transparent; text-shadow:0 1px 2px rgba(0,0,0,.6); transform:translateY(-1px);
@@ -196,7 +194,6 @@ const SEND_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" st
 const SEND_FLASH_MS = 2500;
 const TABS = [["roles", "캐릭터"], ["skills", "스킬"], ["cost", "비용·손패"], ["buffs", "버프"], ["lineup", "편성"], ["log", "로그"]];
 const NO_RECORD = "이 전투에는 기록이 없습니다";
-const OFF_CARD = { name: "카드 외 피해", detail: "패시브·발동 효과 등 카드에 묶이지 않은 피해" };
 const KINDS = { buff: ["▲", "버프", "up"], debuff: ["▼", "디버프", "down"] };
 const KIND_OTHER = ["●", "기타", "etc"];
 const POLL_MS = 250;
@@ -209,7 +206,6 @@ const PARTY_SLOTS = 5;
 const $ = id => document.getElementById(id);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
 const svgEl = (t, attrs) => { const n = document.createElementNS("http://www.w3.org/2000/svg", t); Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v)); return n; };
-// 구버전 전투처럼 필드가 비어 있어도 화면이 깨지지 않게 하는 도우미
 const arr = v => Array.isArray(v) ? v : [];
 const obj = v => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 const objs = v => arr(v).filter(x => x && typeof x === "object" && !Array.isArray(x));
@@ -221,7 +217,6 @@ const num = raw => {
   if (a >= 1e4) return (v / 1e4).toFixed(a >= 1e6 ? 0 : 1) + "만";
   return Math.round(v).toLocaleString();
 };
-// 비용처럼 작은 수: 값이 없으면 "-", 소수 끝의 0 은 뗀다
 const amount = (v, digits = 2) => Number.isFinite(v) ? String(+v.toFixed(digits)) : "-";
 const count = (v, unit = "") => Number.isFinite(v) ? v.toLocaleString() + unit : "-";
 const clock = raw => { const s = n0(raw); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
@@ -251,7 +246,7 @@ const sendButton = el("button");
 sendButton.id = "send";
 sendButton.onclick = () => sendBattle();
 $("tabs").replaceChildren(...tabButtons, sendButton);
-let sending = "", sendFlash = null; // sendFlash = { id, text, cls } — 결과를 잠깐 보여 줄 때
+let sending = "", sendFlash = null;
 
 function syncTabs() {
   tabButtons.forEach((b, i) => {
@@ -295,7 +290,6 @@ const dateText = sec => {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
 };
 
-// 조합의 캐릭터 한 칸. 초상화가 없으면 이름 앞 글자를 보여 준다.
 function partySlot(member) {
   const slot = el("span", "slot" + (member && member.leader ? " lead" : ""));
   if (!member) return slot;
@@ -322,7 +316,7 @@ function itemBox(b) {
   box.setAttribute("aria-label", `${b.live ? "진행 중인 전투" : dateText(b.started) + " 기록"}, 조합 ${names || "정보 없음"}, 총 피해 ${num(b.total)}`);
   const when = el("div", "when");
   when.append(b.live ? el("span", "badge", "전투 중") : el("span", "", dateText(b.started)));
-  if (b.server) when.append(el("span", "srv", (data.servers || {})[b.server] || String(b.server))); // 서버 표시 (기록의 server — 여러 서버의 기록을 한 폴더에 모아도 가릴 수 있게)
+  if (b.server) when.append(el("span", "srv", (data.servers || {})[b.server] || String(b.server)));
   const slots = el("div", "slots");
   for (let i = 0; i < Math.max(PARTY_SLOTS, party.length); i += 1) slots.append(partySlot(party[i]));
   const foot = el("div", "foot");
@@ -409,7 +403,6 @@ function renderSpark(timeline) {
   }));
 }
 
-// 시간 기준: 게임이 알려 준 소요 시간 > 게임 프레임 > 구버전 전투의 벽시계
 function secondsOf(b) {
   if (b.game_duration) return b.game_duration;
   if (b.frame) return b.frame / 60;
@@ -417,12 +410,21 @@ function secondsOf(b) {
   return b.first_hit ? Math.max(n0(end) - b.first_hit, 1) : 0;
 }
 
+const cardDmg = s => n0(s.dmgSum ?? s.dmg);
 const skillLine = s => {
   const peak = s.maxCast > 0 ? `시전 최대 ${num(s.maxCast)}` : `최대 0.05초 ${num(s.maxUpdate)}`;
-  return `사용 ${n0(s.use)} · 판정 ${n0(s.findtimes)} · 사용당 ${s.use ? num(n0(s.dmg) / s.use) : "-"} · ${peak}`;
+  return `사용 ${n0(s.use)} · 판정 ${n0(s.findtimes)} · 사용당 ${s.use ? num(cardDmg(s) / s.use) : "-"} · ${peak}`;
 };
+const KIND_TEXT = { "카드": "카드", "일반 공격": "일반 공격", "돌파": "돌파 효과", "공명": "공명 효과", "패시브": "패시브",
+  "소환물": "소환물", "장비": "장비", "키워드": "키워드 효과", "기타": "기타 효과" };
+const effectLine = (e, card) => {
+  const head = (KIND_TEXT[e.kind] || e.kind) + (e.how === "multi" ? " · 같은 피해를 내는 효과 여럿" : "");
+  const hits = `타격 ${num(e.hits)} · 타격당 ${e.hits ? num(e.value / e.hits) : "-"}`;
+  return card ? `${head} · ${hits} · 사용 ${n0(card.use)}` : `${head} · ${hits}`;
+};
+const MISSED = { name: "이력에서 놓친 피해", detail: "미터가 버프 이력을 다 읽지 못한 몫 (보통 0 — 0 이 아니면 알려 주세요)" };
+const OLD_REST = { name: "효과 미기록 (옛 기록)", detail: "타격별 효과를 남기기 전(11-28 이전) 미터로 잰 기록이라 카드에 적히지 않은 피해의 효과를 모릅니다" };
 
-// 이름의 '·' 앞부분이 같은 카드를 한 행으로 합친다. 혼자인 카드는 원래 이름을 유지한다.
 function mergeByName(list) {
   const groups = new Map();
   list.forEach(s => {
@@ -431,7 +433,7 @@ function mergeByName(list) {
     if (!groups.has(head)) groups.set(head, { name: head, full, members: 0, owner: s.owner, dmg: 0, use: 0, findtimes: 0, maxCast: 0, maxUpdate: 0 });
     const g = groups.get(head);
     g.members += 1;
-    g.dmg += n0(s.dmg);
+    g.dmg += cardDmg(s);
     g.use += n0(s.use);
     g.findtimes += n0(s.findtimes);
     g.maxCast = Math.max(g.maxCast, n0(s.maxCast));
@@ -445,9 +447,18 @@ function viewRoles({ b, roles, skills, total, secs, role }) {
   if (role) {
     const owners = obj(b.owners);
     const mine = skills.filter(s => String(owners[String(s.id)]) === roleFocus);
-    const rest = Math.max(n0(role.damage) - mine.reduce((a, s) => a + n0(s.dmg), 0), 0);
-    const items = [...mine.map(s => ({ name: s.name, value: n0(s.dmg), detail: skillLine(s) })),
-      ...(rest ? [{ name: OFF_CARD.name, value: rest, detail: OFF_CARD.detail }] : [])];
+    const effects = b.effects && b.effects[roleFocus];
+    if (b.effects) {
+      const list = arr(effects);
+      const byName = new Map(mine.map(s => [s.name, s]));
+      const items = list.map(e => ({ name: e.name, value: n0(e.value), detail: effectLine(e, e.kind === "카드" ? byName.get(e.name) : null) }));
+      const missed = n0(role.damage) - items.reduce((a, it) => a + it.value, 0);
+      if (missed > 0 && !b.live) items.push({ name: MISSED.name, value: missed, detail: MISSED.detail });
+      return items.length ? barRows(items, items.reduce((a, it) => a + it.value, 0), secs) : [el("div", "empty", "기록된 피해가 없습니다.")];
+    }
+    const rest = Math.max(n0(role.damage) - mine.reduce((a, s) => a + cardDmg(s), 0), 0);
+    const items = [...mine.map(s => ({ name: s.name, value: cardDmg(s), detail: skillLine(s) })),
+      ...(rest ? [{ name: OLD_REST.name, value: rest, detail: OLD_REST.detail }] : [])];
     return barRows(items, items.reduce((a, it) => a + it.value, 0), secs);
   }
   const max = roles.length ? n0(roles[0].damage) : 0;
@@ -471,10 +482,27 @@ function viewSkills({ b, skills, total, secs }) {
     const o = owners[String(s.id)];
     return { ...s, owner: o && roleMap[o] ? roleMap[o].name : "" };
   });
-  const list = groupSame ? mergeByName(named) : named;
-  const rest = Math.max(total - skills.reduce((a, s) => a + n0(s.dmg), 0), 0);
-  const items = [...list.map(s => ({ name: s.name, value: n0(s.dmg), detail: `${s.owner ? s.owner + " · " : ""}${skillLine(s)}` })),
-    ...(rest ? [{ name: OFF_CARD.name, value: rest, detail: OFF_CARD.detail }] : [])];
+  let items;
+  if (b.effects) {
+    const flat = [];
+    Object.entries(obj(b.effects)).forEach(([rid, list]) => arr(list).forEach(e => flat.push({ ...e, owner: roleMap[rid] ? roleMap[rid].name : "" })));
+    const merged = new Map();
+    flat.forEach(e => {
+      const key = groupSame ? e.name : `${e.owner}\u0000${e.name}`;
+      const g = merged.get(key);
+      if (g) { g.value += n0(e.value); g.hits += n0(e.hits); if (g.owner !== e.owner) g.owner = ""; }
+      else merged.set(key, { ...e, value: n0(e.value), hits: n0(e.hits) });
+    });
+    items = [...merged.values()].sort((x, y) => y.value - x.value)
+      .map(e => ({ name: e.name, value: e.value, detail: `${e.owner ? e.owner + " · " : ""}${effectLine(e, null)}` }));
+    const missed = total - items.reduce((a, it) => a + it.value, 0);
+    if (missed > 0 && !b.live) items.push({ name: MISSED.name, value: missed, detail: MISSED.detail });
+  } else {
+    const list = groupSame ? mergeByName(named) : named;
+    const rest = Math.max(total - skills.reduce((a, s) => a + cardDmg(s), 0), 0);
+    items = [...list.map(s => ({ name: s.name, value: cardDmg(s), detail: `${s.owner ? s.owner + " · " : ""}${skillLine(s)}` })),
+      ...(rest ? [{ name: OLD_REST.name, value: rest, detail: OLD_REST.detail }] : [])];
+  }
   const tools = el("div", "tools");
   tools.append(toggle("group", "같은 이름 묶기", groupSame, () => {
     groupSame = !groupSame;
@@ -496,7 +524,6 @@ function tile(label, value, sub) {
 
 const pointsOf = (series, col) => series.filter(r => Array.isArray(r) && Number.isFinite(r[0]) && Number.isFinite(r[col])).map(r => [r[0], r[col]]);
 
-// 시리즈 하나짜리 선 그래프. 그래프를 다시 만들어도 툴팁은 paintHover 가 이어서 그린다.
 function lineChart({ id, title, pts, top, step, axis, tip }) {
   const box = el("div", "chart");
   box.append(el("div", "ct", title));
@@ -623,7 +650,6 @@ const selectedUnit = units => units.find(u => String(u.key) === buffUnit) || uni
 function pickUnit(key) {
   buffUnit = key;
   store.set("buffUnit", key);
-  // 응답이 오기 전까지 이전 유닛의 변화 기록을 보여 주지 않는다
   if (data && data.battle) data.battle.buffEvents = null;
   $("list").scrollTop = 0;
   paint(true);
@@ -691,7 +717,6 @@ function viewBuffs({ b }) {
   const head = [picker, tools];
   if (buffView === "events") {
     if (!Array.isArray(b.buffEvents)) return [...head, el("div", "empty", "불러오는 중입니다.")];
-    // 변화 기록에는 종류가 없으므로 현황 행의 라벨로 내부 효과를 가려낸다
     const known = new Set(rows.map(r => r.label)), kept = new Set(visible.map(r => r.label));
     const events = b.buffEvents.filter(ev => !known.has(arr(ev)[1]) || kept.has(arr(ev)[1]));
     const hiddenCount = b.buffEvents.length - events.length;
@@ -804,7 +829,6 @@ function viewLineup({ b }) {
 
 const VIEWS = { roles: viewRoles, skills: viewSkills, cost: viewCost, buffs: viewBuffs, lineup: viewLineup, log: viewLog };
 
-// 목록을 통째로 바꾸되 키보드 포커스는 같은 요소로 되돌린다
 function swap(nodes) {
   const host = $("list");
   const active = document.activeElement;
@@ -816,8 +840,6 @@ function swap(nodes) {
   }
 }
 
-// 누르고 있는 동안에는 목록을 다시 그리지 않는다.
-// 누름과 뗌 사이에 요소가 바뀌면 브라우저가 click 을 보내지 않아 클릭이 사라진다.
 const pressing = () => performance.now() - pressedAt < 600;
 
 function render(force) {
@@ -851,7 +873,6 @@ function render(force) {
   $("time").textContent = clock(secs);
   renderSpark(b.timeline);
   const skills = Object.values(obj(b.skills)).map(obj).filter(s => n0(s.dmg) > 0 || n0(s.use) > 0).sort((x, y) => n0(y.dmg) - n0(x.dmg));
-  // 편성 탭은 전투가 진행돼도 내용이 그대로면 다시 그리지 않는다 (코드 선택과 복사 표시를 유지)
   const lineup = tab === "lineup" ? b.id + JSON.stringify(b.lineup ?? null) + !!b.live : "";
   if (force || !lineup || lineup !== lineupDrawn) {
     lineupDrawn = lineup;
@@ -874,7 +895,6 @@ function paint(force) {
   $("err").style.display = message ? "block" : "none";
 }
 
-// 서버 전송 버튼: 끝난 전투만 보낼 수 있다. 보낸 적 있으면 '전송됨' (다시 보내도 서버가 같은 기록은 한 번만 저장)
 function syncSend(b) {
   const id = b ? String(b.id) : "";
   const flash = sendFlash && sendFlash.id === id ? sendFlash : null;
@@ -930,7 +950,6 @@ async function setArmed(on) {
 function viewUrl() {
   if (screen === "list") return "/api/view?list=1";
   const units = objs(data && data.battle && data.battle.buffs);
-  // 지금 전투에 없는 유닛이면 빈 값으로 보내 서버가 첫 유닛을 고르게 한다
   const unit = units.length && !units.some(u => String(u.key) === buffUnit) ? "" : buffUnit;
   return `/api/view?battle=${encodeURIComponent(picked)}&unit=${encodeURIComponent(unit)}`;
 }
@@ -958,7 +977,6 @@ async function refresh(force) {
   if (next) { fails = 0; data = next; paint(force); }
 }
 
-// 툴팁은 목록에 위임한다: 그래프가 다시 그려져도 같은 자리에서 이어진다
 $("list").addEventListener("mousemove", e => {
   const plot = e.target.closest ? e.target.closest(".plot[data-chart]") : null;
   if (!plot && !hover) return;

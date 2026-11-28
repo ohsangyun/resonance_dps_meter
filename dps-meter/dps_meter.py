@@ -1,24 +1,3 @@
-#!/usr/bin/env python3
-"""레조넌스 딜 미터: 실행 중인 게임의 전투 상태를 읽어 피해·비용·손패·버프를 기록하고 보여 준다.
-
-게임 메모리는 읽기만 한다 (PROCESS_QUERY_INFORMATION | PROCESS_VM_READ).
-쓰기·코드 주입·게임 파일 변경은 하지 않으며, 읽기가 막히면 오류를 표시하고 멈춘다.
-
-자동 사용 설정은 레지스트리(Unity PlayerPrefs)에서 역시 읽기만 한다.
-육성 정보는 이번 전투에 실제로 들어간 메모리 값만 쓴다. 로그인 때 한 번 찍히는 Player.log 는 그 뒤의 변경을 모르므로 쓰지 않는다.
-
-전투는 메모리 스캔 없이 정적 경로로만 찾는다.
-  BuffBase 정적 필드 +0x18 = BattleControlManager → TeamData → BattleData → BattleResult
-게임이 업데이트되면 RVA 를 다시 뽑아야 한다. 시작할 때 클래스 이름으로 검증한다.
-
-기록의 시간축은 전부 게임 프레임이다 (t = frame/60, 게임 타이머 기준. 시뮬 시각+3초≈게임 시각).
-비용과 속성의 SN 은 값 x 10000 이다.
-
-사용법
-  딜미터.pyw 더블클릭                           창 띄우기 (항상 위, 이미 켜져 있으면 창만 다시 연다)
-  python dps-meter/dps_meter.py --no-window     서버만 실행
-  python dps-meter/dps_meter.py --check         지금 전투 상태를 한 번 출력
-"""
 import argparse
 import base64
 import collections
@@ -47,65 +26,18 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
 
 
-def main_checkout(root):
-    """git 작업 폴더(worktree)에서 켰으면 원래 저장소 폴더를, 아니면 root 를 돌려준다."""
-    try:
-        marker = (root / ".git").read_text(encoding="utf-8").strip()  # 작업 폴더의 .git 은 "gitdir: ..." 한 줄짜리 파일
-        if marker.startswith("gitdir:"):
-            gitdir = (root / marker[len("gitdir:"):].strip()).resolve()
-            common = (gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()).resolve()
-            if common.name == ".git":
-                return common.parent
-    except OSError:
-        pass  # 원래 저장소 폴더라 .git 이 폴더이거나, git 밖에 있다.
-    return root
-
-
-def asset_dir(*parts):
-    """git 에 없는 그림 폴더(web/img). 작업 폴더에는 없으므로 원래 저장소 폴더에서도 찾는다."""
-    for base in (ROOT, main_checkout(ROOT)):
-        if base.joinpath(*parts).is_dir():
-            return base.joinpath(*parts)
-    return ROOT.joinpath(*parts)
-
-
-GAME_DATA = ROOT / "web" / "data" / "game.js"
-ROSTER_DATA = ROOT / "data" / "kr_roster.json"
-EXTRA_DATA = HERE / "extra_names.json"
-DEFAULT_LOG_DIR = HERE / "logs"
-ICON_FILE = HERE / "icon.png"
-PORTRAIT_DIR = asset_dir("web", "img", "unit")
+DEFAULT_LOG_DIR = HERE.parent / "logs"
 PORTRAIT_PATH = re.compile(r"/unit/([0-9]{1,12})\.webp")
-EQUIP_ICON_DIR = asset_dir("web", "img", "equip")
-EXTRA_IMAGE_DIR = HERE / "img"
 EQUIP_ICON_PATH = re.compile(r"/equip/([0-9]{1,12})\.webp")
 APPDIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ResonanceDpsMeter"
-# 자료 묶음 (2026-11-23): 배포 묶음은 초상화·장비 아이콘과 이름 자료(game.js·kr_roster.json)를 폴더 대신 파일 하나(assets.pak)에 가려서 넣는다
-#   (tools/build_meter_dist.py 가 만듦).
-#   형식: ASSET_PACK_MAGIC + 소금 16바이트 + 목차 길이 4바이트(리틀 엔디언) + 가린 목차(json: 이름 → [위치, 길이]) + 가린 내용들.
-#   이름: 그림 "unit/<id>"·"equip/<id>"(webp), 이름 자료 "data/game.js"·"data/kr_roster.json"(zlib 으로 누른 것).
-#   가리기 = SHAKE-256(키 + 소금 + 이름)으로 뽑은 바이트와 XOR. 키가 이 파일에 있으니 암호가 아니라 눈가림이다:
-#   폴더를 열어 내용을 바로 보거나 통째로 가져가지 못하게 하는 정도이고, 이 코드를 읽는 사람은 풀 수 있다.
-#   이 파일이 있으면 그림은 여기서만 읽고, 없으면(저장소에서 켤 때) web/img·web/data·data 폴더에서 읽는다.
 ASSET_PACK = HERE / "assets.pak"
 ASSET_PACK_MAGIC = b"RSMP1"
 ASSET_PACK_KEY = b"b6cc60911180c260f6c7f738f7e17879462b5aa7acfa1c39"
-# 서버 전송 (2026-11-23): 화면의 '서버 전송' 버튼이 끝난 전투의 기록 파일을 gzip 으로 묶어 기록 받는 서버(log_server.py)에 보낸다.
-#   주소·키는 --upload-url/--upload-key > 이 폴더의 upload.json(배포 묶음이 적어 둠) > 기본값 순서. 보낸 기록 파일 이름은 SENT_FILE 에 남긴다.
 DEFAULT_UPLOAD_URL = "https://resonance.sayuu.is-a.dev/meter/upload"
-UPLOAD_CONFIG = HERE / "upload.json"
 SENT_FILE = APPDIR / "sent.json"
 UPLOAD = {"url": DEFAULT_UPLOAD_URL, "key": ""}
-# 서버 정보 표 (2026-11-16): 서버마다 실행 파일 이름·Unity PlayerPrefs 레지스트리 키·클래스 주소표(RVA)가 다르다.
-#   켜져 있는 게임의 실행 파일 이름으로 서버를 가리고(find_pid), 그 서버의 값으로 아래 전역(PROCESS_NAME·GAME_PREFS_KEY·RVA)을 맞춘다(use_server).
-#   기록에는 서버 번호(server)와 게임 빌드(build)를 적는다 — 여러 사람·여러 서버의 기록을 한데 모아도 가릴 수 있게.
-#   주소표는 그 서버 설치본을 Il2CppDumper 로 풀어야 나온다 (script.json 의 Battle.<클래스>_TypeInfo).
-#   build 는 주소표를 뽑은 GameAssembly.dll 의 빌드 표시다: 켜진 게임의 것과 다르면 주소표가 낡은 것이라 읽지 않고 "버전 불일치"로 멈춘다.
-#   일섭·중섭(2026-11-18)의 주소표·레지스트리 키는 설치본에서 뽑았고, 미터가 읽는 클래스의 칸 배치는 한섭과 같다(Unity 2019.4.40f1, 메타데이터 24 도 같음).
-#   켠 게임에서 확인: 한섭(11-16), 일섭(11-23 — 붙기·빌드 확인·기록 저장). 중섭은 설치본 대조뿐이다 [미확인] (창에 따로 표시하지는 않는다 — 11-23 사용자 결정).
 SERVERS = {
     "kr": {"name": "한섭", "process": "레조넌스.exe", "prefs": "Software\\临界\\레조넌스",
            "build": {"timeDateStamp": 1776070607, "sizeOfImage": 0x48E7000},
@@ -120,9 +52,8 @@ SERVERS = {
            "rva": {"BattleResult": 0x404C170, "RoleInfo": 0x404BA88, "BattleSkillInfo": 0x404BA40,
                    "BuffBase": 0x404A238, "TeamData": 0x404C3B8}},
 }
-SERVER = "kr"  # 지금 붙은(또는 마지막으로 찾은) 게임의 서버
+SERVER = "kr"
 GAME_PREFS_KEY = SERVERS[SERVER]["prefs"]
-# 값 이름 앞부분은 계정 식별자다. 뒤쪽 키만 쓰고 이름 전체는 어디에도 남기지 않는다.
 PREFS_NAME = re.compile(r"^.*?(CardAIData|CardAIOn|CardAIBan)(.*?)_h\d+$")
 PROCESS_NAME = SERVERS[SERVER]["process"]
 WINDOW_TITLE = "레조넌스 딜 미터"
@@ -131,13 +62,11 @@ RVA = SERVERS[SERVER]["rva"]
 
 
 def pack_mask(data, salt, name):
-    """자료 묶음의 가리기·풀기 (XOR 이라 같은 함수)."""
     stream = hashlib.shake_256(ASSET_PACK_KEY + salt + name.encode("utf-8")).digest(len(data))
     return (int.from_bytes(data, "little") ^ int.from_bytes(stream, "little")).to_bytes(len(data), "little")
 
 
 class AssetPack:
-    """자료 묶음 읽기. 파일이 없거나 모양이 다르면 load 가 None 을 돌려준다."""
 
     def __init__(self, blob, salt, index):
         self.blob, self.salt, self.index = blob, salt, index
@@ -164,19 +93,14 @@ class AssetPack:
 ASSETS = AssetPack.load()
 
 
-def read_data(path, name):
-    """이름 자료를 글로 읽는다: 자료 묶음에 있으면 거기서, 없으면 저장소의 파일에서."""
+def read_data(name):
     packed = ASSETS.get(name) if ASSETS else None
     if not packed:
-        return path.read_text(encoding="utf-8")
-    try:
-        return zlib.decompress(packed).decode("utf-8")
-    except zlib.error as exc:
-        raise ValueError(f"자료 묶음의 {name} 을 풀지 못했습니다: {exc}")
+        raise OSError(f"assets.pak 에 {name} 이 없습니다")
+    return zlib.decompress(packed).decode("utf-8")
 
 
 def use_server(server):
-    """지금 붙을 게임의 서버를 고른다 (실행 파일 이름·레지스트리 키·주소표를 그 서버 것으로)."""
     global SERVER, PROCESS_NAME, GAME_PREFS_KEY, RVA
     info = SERVERS[server]
     SERVER, PROCESS_NAME, GAME_PREFS_KEY, RVA = server, info["process"], info["prefs"], info["rva"]
@@ -185,19 +109,19 @@ def use_server(server):
 STATE_NAMES = {4: "전투 중", 3: "전투 시작 대기", 5: "대열 정비", 6: "팀 카드 선택", 7: "이동 중",
                8: "승리 연출", 1: "전투 종료"}
 
-SCHEMA_VERSION = 6  # 3: cards[].target/pos/ai, ops, snapshots 유닛 pos 추가. 4: 게임 프레임마다 표본, hits/actions/dotTicks 추가. 5: server(서버 번호)·build(게임 빌드) 추가
-POLL_HZ = 60  # 게임 프레임(초당 60)이 바뀔 때마다 한 번 읽는다
-FRAME_SLEEP = 0.002  # 프레임이 바뀌었는지 보는 간격
-RECHECK_SECONDS = 0.05  # 프레임이 멈춰 있을 때(일시정지·종료 직후) 다시 읽는 간격
-DOT_MOD = "周期效果"  # 주기 효과(지속 피해 등). 틱 시점을 프레임 단위로 기록한다
-OPERATION_SIZE = 0x50  # Replay.OperationLog 구조체 크기
+SCHEMA_VERSION = 7
+POLL_HZ = 60
+FRAME_SLEEP = 0.002
+RECHECK_SECONDS = 0.05
+DOT_MOD = "周期效果"
+OPERATION_SIZE = 0x50
 IDLE_SECONDS = 0.25
 PID_CHECK_SECONDS = 3
-WINDOW_CHECK_SECONDS = 2  # 미터 창이 닫혔는지 보는 간격
+WINDOW_CHECK_SECONDS = 2
 STALE_SECONDS = 600
 PAUSE_SECONDS = 2
 FLOW_FRAMES = 6
-BUFF_FRAMES = 3  # 버프 표본은 3프레임(약 0.05초)마다 — 전부 읽으면 무거워서 프레임마다 하지 않는다
+BUFF_FRAMES = 3
 SETTLE_FRAMES = 12
 MAX_LINK = 1024
 MAX_DICT = 4096
@@ -216,10 +140,7 @@ META_FIELDS = ("id", "server", "started", "roles", "conditions", "cardOwners", "
 ADDRESS_MIN = 0x10000
 ADDRESS_MAX = 0x7FFFFFFF0000
 
-# 세부 스펙 (spec). 메모리 값은 전투 시작 부근에 몇 번만 읽는다.
-SPEC_VERSION = 3  # 1 은 일부 필드를 Player.log 로 채우던 옛 기록이다. 3: spec.battle 에 ReplayManager 의 관문 인자(날씨 후보 등) 추가
-# ReplayManager 가 InitBattle 로 받은 관문 인자 (이름, 오프셋, 형식). LevelManager.CreateWeather 가 날씨 후보를 읽는다.
-# 이름은 게임 필드 이름 그대로 — 엔진 재현 시험(tests_replay.rs level_opts_from_log)이 spec.battle 에서 같은 이름으로 읽는다.
+SPEC_VERSION = 3
 REPLAY_INIT_FIELDS = (("isBattleTest", 0x98, "bool"), ("isArena", 0x99, "bool"), ("playerTeamNO", 0x9C, "i32"),
                       ("enemyLevelMin", 0xA0, "i32"), ("difficulty", 0xA4, "i32"), ("bgId", 0xA8, "i32"), ("enemyRn", 0xAC, "i32"),
                       ("weatherList", 0xB0, "int[]"), ("weatherCount", 0xB8, "i32"), ("weatherRateSN", 0xC0, "i64"),
@@ -228,11 +149,18 @@ REPLAY_INIT_FIELDS = (("isBattleTest", 0x98, "bool"), ("isArena", 0x99, "bool"),
 REPLAY_INIT_START, REPLAY_INIT_END = 0x98, 0xE4
 MAX_INT_ARRAY = 256
 EQUIP_SLOTS = 3
-SPEC_RETRY_TICKS = 4  # 약 0.2초마다 다시 시도
-SPEC_MAX_TICKS = 1200  # 약 60초 뒤에는 포기하고 경고를 남긴다
+SPEC_RETRY_TICKS = 4
+SPEC_MAX_TICKS = 1200
 SPEC_STRING = 8192
 MAX_TEAM_UNITS = 8
-MID_BATTLE_FRAMES = 600  # 이보다 늦게 기록을 시작했으면 시작 시점 값이 아니다
+UNIT_READ = 0x4B8
+HISTORY_OFFSET = 0x40
+HISTORY_ENTRY = 0x28
+HISTORY_LIMIT = 1024
+HISTORY_FORMAT = struct.Struct("<qqiiiiii")
+CREDIT_FRAMES = 12
+CREDIT_NODES = 20000
+MID_BATTLE_FRAMES = 600
 STATE_FIGHTING = 4
 ALLY_TEAM = 1
 DISCARD_CARD = 10600474
@@ -243,18 +171,14 @@ OTHER_COND, OTHER_WEIGHTS, KEEP_COND = 96200025, {999999: 0, -999999: 2}, 962000
 DISCARD_ACTION, DISCARD_ALWAYS_COND, DISCARD_DEFAULT_COND = 96300006, 96200034, 96200016
 VALUE_CONDITIONS = {"CardAIConditionKeepCards", "CardAIConditionKeepCosts", "CardAIConditionTeamAttribute"}
 DISCARD_LABELS = {1: "항상 (순위대로)", 2: "사용 안 함", 3: "쓸 수 있는 카드가 없을 때", 4: "순위가 높은 카드가 없을 때"}
-# 게임이 전투에 펫 능력치를 넣는 칸: (장비 칸, 옵션 칸) → 옵션 id. 그 장비의 추가 옵션 대신 들어간다.
 PET_SLOTS = {(0, 4): 12300776, (0, 5): 12300777, (1, 5): 12300771}
 PET_OPTIONS = {12300776: "공격력", 12300777: "방어력", 12300771: "체력"}
-# 장비 돌파로 오른 주 능력치를 전투에 넘기는 패시브 id → (장비 칸, 능력치). 값은 extraSkills 의 'id,A,오른 값' (GetRoleInfoByData).
 EQUIP_BREAK_TOKENS = {12304698: (0, "Atk"), 12304699: (1, "Def"), 12304700: (2, "HpMax")}
-# 미장착이거나 편성에서 끈 칸에 게임이 대신 넣는 장비 id (View_StartBattle). 3번 칸은 -1 이 들어간다.
 EMPTY_EQUIP_ID = 11800220
 UNIT_INFO_SIZE = 0x178
 UNIT_INFO_INTS = {"id": 0x0, "unitViewId": 0x4, "skill1Lv": 0x8, "skill2Lv": 0xC, "skill3Lv": 0x10, "lv": 0x14,
                   "awakeLv": 0x18, "resonanceLv": 0x1C, "trustLv": 0x20, "card1Num": 0x158, "card2Num": 0x15C,
                   "card3Num": 0x160, "roleIndex": 0x170}
-# 칸마다 간격이 달라서 산술식이 아니라 dump.cs 의 표로 읽는다: (장비 id, 레벨, 옵션 id 6개, 옵션 값 6개)
 UNIT_INFO_EQUIPS = (
     (0x24, 0x28, (0x2C, 0x38, 0x48, 0x58, 0x68, 0x78), (0x30, 0x40, 0x50, 0x60, 0x70, 0x80)),
     (0x88, 0x8C, (0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0), (0x98, 0xA8, 0xB8, 0xC8, 0xD8, 0xE8)),
@@ -263,7 +187,6 @@ UNIT_INFO_EQUIPS = (
 UNIT_INFO_LIMITS = {"id": (10000000, 19999999), "lv": (1, 200), "awakeLv": (0, 20), "resonanceLv": (0, 20), "trustLv": (0, 100),
                     "skill1Lv": (0, 100), "skill2Lv": (0, 100), "skill3Lv": (0, 100)}
 
-# 포인터가 잘못되면 read 가 None 을 돌려주고, 해석하다 여기 있는 예외가 난다. 틱을 버리고 계속 돈다.
 TRANSIENT = (TypeError, struct.error, KeyError, IndexError, ValueError, AttributeError)
 
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -304,7 +227,6 @@ advapi32.GetTokenInformation.argtypes = [W.HANDLE, ctypes.c_int, ctypes.c_void_p
 
 
 def runs_elevated(pid):
-    """그 프로세스가 관리자 권한으로 켜져 있는지. 토큰 정보만 본다(메모리는 읽지 않는다). 알 수 없으면 None."""
     process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not process:
         return None
@@ -323,8 +245,6 @@ def runs_elevated(pid):
 
 
 def find_pid(prefer=None):
-    """서버 정보 표에 있는 게임 실행 파일을 찾는다. 찾으면 그 서버로 맞추고(use_server) pid 를 돌려준다.
-    prefer 는 이미 붙어 있는 게임의 pid 다: 그 게임이 살아 있으면 다른 서버의 게임이 같이 켜져 있어도 그대로 둔다."""
     by_process = {info["process"]: server for server, info in SERVERS.items()}
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     entry = PROCESSENTRY32W()
@@ -358,18 +278,15 @@ def i32_at(data, at):
 
 
 def check_num(data, at):
-    """CheckNumSN (24바이트): 값 = (+0x10 의 long) XOR (+0x0 의 long)."""
     return i64_at(data, at + 0x10) ^ i64_at(data, at)
 
 
 def tdiv(a, b):
-    """0 방향으로 자르는 정수 나눗셈 (C# long 나눗셈과 같다)."""
     q = abs(a) // abs(b)
     return q if (a < 0) == (b < 0) else -q
 
 
 def property_unit_value(data, at):
-    """PropertyUnit.GetValueSN 역공학 결과. at 은 구조체(0x98바이트)의 시작 위치."""
     if not data[at + 0x68]:
         return check_num(data, at + 0x70)
     base = check_num(data, at + 0x08)
@@ -388,14 +305,12 @@ def property_unit_value(data, at):
 
 
 class Reader:
-    """게임 프로세스의 읽기 전용 핸들."""
 
     def __init__(self, pid):
         self.pid = pid
         self.handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
         if not self.handle:
             code = ctypes.get_last_error()
-            # 게임을 관리자 권한으로 켜면(2026-11-23 일섭에서 확인) 일반 권한의 미터는 열지 못한다. 우회하지 않고 이유만 알린다 (미터를 관리자 권한으로 켜면 읽힌다).
             if code == ERROR_ACCESS_DENIED and runs_elevated(pid) and not ctypes.windll.shell32.IsUserAnAdmin():
                 raise PermissionError("게임이 관리자 권한으로 켜져 있어 읽을 수 없습니다.")
             raise PermissionError(f"게임 프로세스를 읽을 수 없습니다 (오류 {code})")
@@ -407,7 +322,6 @@ class Reader:
         kernel32.CloseHandle(self.handle)
 
     def build(self):
-        """게임 빌드 표시: GameAssembly.dll 머리말의 빌드 시각과 이미지 크기 (게임이 업데이트되면 바뀐다). 못 읽으면 None."""
         head = self.read(self.base, 0x40) if self.base else None
         pe = self.read(self.base + struct.unpack_from("<I", head, 0x3C)[0], 0x58) if head and head[:2] == b"MZ" else None
         if not pe or pe[:4] != b"PE\0\0":
@@ -415,7 +329,6 @@ class Reader:
         return {"timeDateStamp": struct.unpack_from("<I", pe, 8)[0], "sizeOfImage": struct.unpack_from("<I", pe, 0x50)[0]}
 
     def clear_caches(self):
-        """전투가 시작될 때마다 비운다 (이전 전투의 포인터가 재사용될 수 있다)."""
         self.strings, self.buff_cas, self.card_cas, self.unit_cas, self.leader_maxes = {}, {}, {}, {}, {}
         self.ca_ids, self.product_ids = {}, {}
         self.class_names = {}
@@ -445,7 +358,6 @@ class Reader:
         return u64_at(data, 0) if data else 0
 
     def resolve_classes(self):
-        """TypeInfo 슬롯에서 클래스 포인터를 읽고 이름이 맞는지 확인한다."""
         if not self.base:
             self.base = self._module_base("gameassembly.dll")
         if not self.base:
@@ -453,7 +365,6 @@ class Reader:
         if self.read(self.base, 2) is None:
             self._stop_if_blocked()
             return False
-        # 주소표를 뽑은 빌드가 아니면 슬롯을 읽지 않는다 (엉뚱한 슬롯은 "초기화 전"처럼 보여 끝없이 기다리게 된다)
         build, known = self.build(), SERVERS[SERVER]["build"]
         if build and build != known:
             raise RuntimeError(f"게임이 업데이트되었습니다 ({SERVERS[SERVER]['name']} 빌드 {build['timeDateStamp']}, 미터가 아는 빌드 {known['timeDateStamp']}). "
@@ -462,7 +373,7 @@ class Reader:
         for name, rva in RVA.items():
             klass = self.u64(self.base + rva)
             if not klass or klass & 1:
-                return False  # 게임이 아직 전투 코드를 초기화하지 않음 (초기화 전 슬롯에는 홀수 토큰이 있다)
+                return False
             name_ptr = self.u64(klass + 0x10)
             raw = self.read(name_ptr, len(name) + 1) if name_ptr else None
             if raw != name.encode() + b"\0":
@@ -472,7 +383,6 @@ class Reader:
         return True
 
     def _stop_if_blocked(self):
-        """프로세스는 살아 있는데 읽히지 않으면 막힌 것이다. 우회하지 않고 멈춘다."""
         code = W.DWORD()
         if kernel32.GetExitCodeProcess(self.handle, ctypes.byref(code)) and code.value == STILL_ACTIVE:
             raise PermissionError("게임 메모리 읽기가 막혔습니다. 우회하지 않고 멈춥니다.")
@@ -499,7 +409,6 @@ class Reader:
         return text
 
     def _dict_table(self, ptr, entry_size):
-        """Dictionary 의 엔트리 표와 칸 수. 읽을 수 없으면 (None, 0)."""
         head = self.read(ptr, 0x28)
         if head is None:
             return None, 0
@@ -511,7 +420,6 @@ class Reader:
         return self.read(entries + 0x20, count * entry_size), count
 
     def dict_values(self, ptr, klass_name, size):
-        """Dictionary<int, T> 의 (키, 객체 바이트) 목록. 값의 클래스가 맞는 것만 돌려준다."""
         table, count = self._dict_table(ptr, 24)
         if table is None:
             return None
@@ -519,7 +427,7 @@ class Reader:
         out = []
         for i in range(count):
             hash_code, _next, key, _pad, value = struct.unpack_from("<iiiiQ", table, i * 24)
-            if hash_code < 0 or not value:  # 빈 칸, 또는 게임이 막 추가하는 중인 칸
+            if hash_code < 0 or not value:
                 continue
             data = self.read(value, size)
             if data is None or u64_at(data, 0) != klass:
@@ -528,7 +436,6 @@ class Reader:
         return out
 
     def dict_int_refs(self, ptr):
-        """Dictionary<int, 참조> 의 (키, 포인터) 목록."""
         table, count = self._dict_table(ptr, 24)
         if table is None:
             return []
@@ -540,7 +447,6 @@ class Reader:
         return out
 
     def dict_int_long(self, ptr):
-        """Dictionary<int, long>."""
         table, count = self._dict_table(ptr, 24)
         if table is None:
             return {}
@@ -552,7 +458,6 @@ class Reader:
         return out
 
     def dict_int_int(self, ptr):
-        """Dictionary<int, int> (엔트리 16바이트: hash, next, key, value)."""
         table, count = self._dict_table(ptr, 16)
         if table is None:
             return {}
@@ -564,7 +469,6 @@ class Reader:
         return out
 
     def dict_str_int(self, ptr):
-        """Dictionary<string, int> (엔트리 24바이트: hash, next, 키 문자열 포인터, value)."""
         table, count = self._dict_table(ptr, 24)
         if table is None:
             return {}
@@ -576,7 +480,6 @@ class Reader:
         return out
 
     def list_items(self, ptr, start=0):
-        """List<참조> 의 start 번째부터의 포인터."""
         head = self.read(ptr, 0x20)
         if head is None:
             return []
@@ -587,7 +490,6 @@ class Reader:
         return list(struct.unpack(f"<{size - start}Q", data)) if data else []
 
     def link_items(self, head):
-        """LinkHead<T> 를 앞에서부터 따라가 항목 포인터를 모은다 (최대 1024 노드)."""
         raw = self.read(head, 0x28)
         if raw is None:
             return []
@@ -610,7 +512,6 @@ class Reader:
         return i32_at(raw, 0x20) if raw else 0
 
     def property_values(self, prop):
-        """Property 전체를 {키: SN 값} 으로 읽는다."""
         raw = self.read(prop, 0x48)
         if raw is None:
             return {}
@@ -628,7 +529,6 @@ class Reader:
         return out
 
     def context(self):
-        """정적 경로로 현재 전투를 찾는다. 전투가 아니면 None."""
         statics_raw = self.read(self.klass["BuffBase"] + 0xB8, 8)
         if statics_raw is None:
             self._stop_if_blocked()
@@ -659,7 +559,6 @@ class Reader:
             ai_core=u64_at(team_raw, 0x100), use_card_ai=bool(team_raw[0x108]))
 
     def snapshot(self, obj):
-        """BattleResult 하나를 읽는다. 전투 객체가 아니면 None."""
         data = self.read(obj, 0xA0)
         if not data or u64_at(data, 0) != self.klass["BattleResult"]:
             return None
@@ -682,7 +581,6 @@ class Reader:
                 "cardOrder": u64_at(data, 0x80)}
 
     def result_conditions(self, obj):
-        """전투 조건. cores 와 enemy_ids 는 전투 중에 바뀌므로 캐시하지 않는다."""
         data = self.read(obj, 0xA0)
         if not data or u64_at(data, 0) != self.klass["BattleResult"]:
             return None
@@ -698,7 +596,6 @@ class Reader:
         }
 
     def replay_info(self, manager):
-        """ReplayManager.replay 의 전투 스펙을 읽는다. 반환: (값, 실패 이유). playerUid(+0x18) 는 읽지 않는다."""
         head = self.read(manager, 0x38) if manager else None
         replay = self.read(u64_at(head, 0x30), 0x78) if head else None
         if replay is None:
@@ -718,7 +615,6 @@ class Reader:
             for field, (low, high) in UNIT_INFO_LIMITS.items():
                 if not low <= unit[field] <= high:
                     return None, f"UnitInfo.{field} 값이 범위를 벗어났습니다. 오프셋이 바뀌었을 수 있습니다"
-        # randomSeed(+0x34): BattleMain.GameStart 가 이 값으로 SafeMath.SetRandomSeed 를 부른다 — 시뮬이 같은 판을 재현할 때 쓴다. playerLv(+0x40) 도 관문 생성 인자다
         init, init_error = self.replay_init_args(manager)
         return {"levelId": i32_at(replay, 0x38), "randomSeed": i32_at(replay, 0x34), "playerLv": i32_at(replay, 0x40), "isReplay": bool(head[0x28]), "units": units,
                 "extraCards": read_text(u64_at(replay, 0x58)), "enemyIds": read_text(u64_at(replay, 0x60)),
@@ -726,8 +622,6 @@ class Reader:
                 "init": init, "initError": init_error}, None
 
     def replay_init_args(self, manager):
-        """ReplayManager 가 InitBattle 로 받은 관문 인자(날씨 후보·확률, 난이도 등). 반환: (값, 실패 이유).
-        날씨 후보 배열이 null 이면 None 으로 둔다 — 엔진은 null 과 빈 배열을 다르게 다룬다."""
         raw = self.read(manager + REPLAY_INIT_START, REPLAY_INIT_END - REPLAY_INIT_START)
         if raw is None:
             return None, "ReplayManager 관문 인자를 읽지 못했습니다"
@@ -750,7 +644,6 @@ class Reader:
         return out, None
 
     def int_array(self, ptr):
-        """int[] 의 원소. null 이면 None, 못 읽거나 길이가 이상하면 False."""
         if not ptr:
             return None
         head = self.read(ptr, 0x20)
@@ -765,9 +658,6 @@ class Reader:
         return list(struct.unpack(f"<{size}i", data))
 
     def operation_logs(self, manager, start):
-        """ReplayManager.replay.operationLogList (List<Replay.OperationLog>, 0x50바이트 구조체) 의 start 번째부터.
-        게임이 리플레이용으로 남기는 조작 기록이라 카드 사용 좌표(xSN·zSN)와 대상 uniqueId 가 그대로 들어 있다.
-        cardIndex 는 사용 당시 손패 번호, -1 이면 손패 교체(refresh)나 팀 카드 선택(teamCard) 기록이다."""
         head = self.read(manager, 0x38) if manager else None
         replay_raw = self.read(u64_at(head, 0x30), 0x88) if head else None
         listing = self.read(u64_at(replay_raw, 0x80), 0x20) if replay_raw else None
@@ -794,7 +684,6 @@ class Reader:
         return out
 
     def ai_state(self, ai_core):
-        """CardAICore 의 현재 행동 값·카드·칠판(Dictionary<string,int>). 카드 AI 가 대상 좌표를 고른 근거를 남기기 위한 것."""
         raw = self.read(ai_core, 0xC0) if ai_core else None
         if raw is None:
             return None
@@ -851,8 +740,6 @@ class Reader:
         }
 
     def card_order(self, ptr, start):
-        """cardOrder (List<RecordCardInfo>) 의 start 번째부터의 새 항목.
-        게임이 막 추가해 아직 비어 있는 칸이 나오면 거기서 멈추고 다음 틱에 다시 읽는다."""
         out = []
         for item in self.list_items(ptr, start):
             raw = self.read(item, 0x68) if item else None
@@ -864,7 +751,6 @@ class Reader:
         return out
 
     def card_ca(self, ptr):
-        """CardCA 의 (id, 이름, 기본 비용 SN)."""
         cached = self.card_cas.get(ptr)
         if cached is None:
             raw = self.read(ptr, 0xD8)
@@ -874,16 +760,10 @@ class Reader:
         return cached
 
     def property_card_ca(self, raw):
-        """CardProperty 바이트에서 실제로 쓰이는 카드(_fakeCard 우선)의 CardCA."""
         card = u64_at(raw, 0x70) or u64_at(raw, 0x68)
         return self.card_ca(self.u64(card + 0x108)) if card else None
 
     def hand_cards(self, head, adjust):
-        """손패를 [{id, name, cost}] 로 읽는다.
-
-        cost 는 근사값이다: 카드 기본 비용에 _adjustCostDic 을 반영하고 카드 자신의
-        CostOffset·TempCostOffset 을 더한 값이며, _lockCost_SN 이 있으면 그 값으로 대체한다.
-        유닛 오프셋과 손패 할인 버프는 게임 로직이 복잡해 제외했다."""
         out = []
         for item in self.link_items(head):
             raw = self.read(item, 0xD8)
@@ -902,13 +782,11 @@ class Reader:
         return out
 
     def leader_card(self, property_ptr):
-        """리더 카드(CardProperty)의 (id, 이름). 없으면 None."""
         raw = self.read(property_ptr, 0xD8) if property_ptr else None
         ca = self.property_card_ca(raw) if raw else None
         return ca[:2] if ca else None
 
     def leader_conditions(self, list_ptr):
-        """리더 카드 조건들의 [{progress, max, finished}]."""
         out = []
         for item in self.list_items(list_ptr):
             raw = self.read(item, 0x74)
@@ -923,7 +801,6 @@ class Reader:
         return out
 
     def unit_ca(self, ptr):
-        """UnitCA 의 (id, 이름)."""
         cached = self.unit_cas.get(ptr)
         if cached is None:
             raw = self.read(ptr, 0x60)
@@ -933,14 +810,13 @@ class Reader:
         return cached
 
     def units(self, manager):
-        """UnitManager._unitDic 의 전체 유닛을 [(팀 키, 포인터, 바이트)] 로 돌려준다."""
         raw = self.read(manager, 0x58)
         if raw is None:
             return []
         out = []
         for team, list_ptr in self.dict_int_refs(u64_at(raw, 0x50)):
             for unit in self.list_items(list_ptr):
-                data = self.read(unit, 0x4A0) if unit else None
+                data = self.read(unit, UNIT_READ) if unit else None
                 if data is not None:
                     out.append((team, unit, data))
                 if len(out) >= MAX_UNITS:
@@ -948,7 +824,6 @@ class Reader:
         return out
 
     def role_order(self, list_ptr):
-        """TeamData._roleList 의 캐릭터 id 순서."""
         out = []
         for unit in self.list_items(list_ptr):
             ca = self.unit_ca(self.u64(unit + 0x490)) if unit else None
@@ -957,7 +832,6 @@ class Reader:
         return out
 
     def buff_ca(self, ptr):
-        """BuffSustainCA 의 필요한 값 (포인터별로 캐시)."""
         cached = self.buff_cas.get(ptr)
         if cached is None:
             raw = self.read(ptr, 0x140)
@@ -969,7 +843,6 @@ class Reader:
         return cached
 
     def ca_id(self, ptr):
-        """CABase.id (포인터별로 캐시)."""
         if not ptr:
             return 0
         cached = self.ca_ids.get(ptr)
@@ -979,7 +852,6 @@ class Reader:
         return cached
 
     def product_id(self, ptr):
-        """Product(카드 등)의 ca.id (포인터별로 캐시)."""
         if not ptr:
             return 0
         cached = self.product_ids.get(ptr)
@@ -989,15 +861,36 @@ class Reader:
         return cached
 
     def action_of(self, action):
-        """UnitAction 하나: (동작 id, 진행 프레임, 전체 프레임, 카드 id, 일반 공격 여부, 리더 스킬 여부). 없으면 None."""
         raw = self.read(action, 0x178) if action else None
         if raw is None:
             return None
         return (self.ca_id(u64_at(raw, 0x170)), i32_at(raw, 0xBC), i32_at(raw, 0xC0), self.product_id(u64_at(raw, 0xE8)),
                 bool(raw[0x10D]), bool(raw[0xE0]))
 
+    def history_head(self, system):
+        queue = self.u64(system + HISTORY_OFFSET) if system else 0
+        head = self.read(queue, 0x28) if queue else None
+        if head is None:
+            return None
+        capacity, array, ptr, length = i32_at(head, 0x10), u64_at(head, 0x18), i32_at(head, 0x20), i32_at(head, 0x24)
+        if not 0 < capacity <= HISTORY_LIMIT or not 0 <= length <= capacity or not 0 <= ptr < capacity or not array:
+            return None
+        return queue, capacity, array, ptr, length
+
+    def history_slots(self, array, first, count, capacity):
+        out = []
+        while count > 0:
+            n = min(count, capacity - first)
+            raw = self.read(array + 0x20 + first * HISTORY_ENTRY, n * HISTORY_ENTRY)
+            if raw is None:
+                return None
+            for before, after, sid, frame, source, from_sid, buff_id, _time in HISTORY_FORMAT.iter_unpack(raw):
+                out.append((sid, frame, buff_id, source, from_sid, before, after))
+            count -= n
+            first = 0
+        return out
+
     def dots_of(self, system):
-        """BuffSystem 의 주기 효과(BuffDot) 인스턴스: [(포인터, buff id, 건 유닛의 sid, 프레임 카운터, 틱 간격)]."""
         head = self.read(system, 0x38)
         if head is None:
             return []
@@ -1005,7 +898,7 @@ class Reader:
         for link in (u64_at(head, 0x18), u64_at(head, 0x30)):
             for item in self.link_items(link):
                 raw = self.read(item, 0x128)
-                if raw is None or raw[0x30] or raw[0x58]:  # isRecycled, _isEnd
+                if raw is None or raw[0x30] or raw[0x58]:
                     continue
                 ca = self.buff_ca(u64_at(raw, 0x100))
                 if ca is None or ca["mod"] != DOT_MOD:
@@ -1014,10 +907,6 @@ class Reader:
         return out
 
     def buffs_of(self, system):
-        """BuffSystem 의 활성 버프를 buff id 로 합친다.
-
-        _buffLink 와 _cannotBeDispelled 가 전체 집합이다 (게임의 GetBuffLevel 도 이 둘만 합산).
-        반환: {buff id: {ca, stacks(Level 합), instances, left(영구면 None, 아니면 최대 남은 프레임)}}"""
         head = self.read(system, 0x38)
         if head is None:
             return {}
@@ -1025,7 +914,7 @@ class Reader:
         for link in (u64_at(head, 0x18), u64_at(head, 0x30)):
             for item in self.link_items(link):
                 raw = self.read(item, 0x108)
-                if raw is None or raw[0x30] or raw[0x58]:  # isRecycled, _isEnd
+                if raw is None or raw[0x30] or raw[0x58]:
                     continue
                 level = i32_at(raw, 0xC0)
                 if level <= 0:
@@ -1043,7 +932,6 @@ class Reader:
         return out
 
 
-# 버프 내부 이름(idCN) 번역용 용어집
 GLOSSARY = {
     "卡牌": "카드", "手牌": "손패", "费用": "비용", "回费": "비용 회복", "层数": "중첩", "标记": "표식", "计数": "카운트",
     "监测": "감시", "触发": "발동", "参数": "파라미터", "特效": "이펙트", "增伤": "피해 증가", "减伤": "피해 감소", "音符": "노트",
@@ -1060,7 +948,6 @@ BUFF_PIECE_NUMBER = re.compile(r"^[0-9]{2}")
 
 
 class Names:
-    """게임 데이터(web/data/game.js)로 ID 와 중국어 이름을 한국어로 바꾼다."""
 
     def __init__(self):
         self.roster, self.kr, self.records, self.zh_names = {}, {}, {}, []
@@ -1070,7 +957,7 @@ class Names:
         self.labels, self.kinds = {}, {}
         self.glossary = sorted(GLOSSARY.items(), key=lambda kv: -len(kv[0]))
         try:
-            text = read_data(GAME_DATA, "data/game.js")
+            text = read_data("data/game.js")
             game = json.loads(text[text.index("{"):text.rindex("}") + 1])
             self.roster = {r["id"]: r["name"] for r in game.get("roster", [])}
             self.kr = game.get("kr", {})
@@ -1083,13 +970,13 @@ class Names:
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print("게임 데이터를 읽지 못했습니다:", exc, file=sys.stderr)
         try:
-            roster = json.loads(read_data(ROSTER_DATA, "data/kr_roster.json"))
+            roster = json.loads(read_data("data/kr_roster.json"))
             pairs = {r["zh"]: r["name"] for r in roster if r.get("zh") and r.get("name")}
             self.zh_names = sorted(pairs.items(), key=lambda kv: -len(kv[0]))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print("캐릭터 목록을 읽지 못했습니다:", exc, file=sys.stderr)
         try:
-            extra = json.loads(read_data(EXTRA_DATA, "data/extra_names.json"))
+            extra = json.loads(read_data("data/extra_names.json"))
             for r in extra.get("roster", []):
                 self.roster.setdefault(r["id"], r["name"])
             for key, record in (extra.get("records") or {}).items():
@@ -1120,9 +1007,7 @@ class Names:
         return self.kr.get(record.get("name"), record.get("name")) or str(key)
 
     def _translate_piece(self, piece):
-        """idCN 조각 하나를 번역한다: 캐릭터 이름 → 조각 전체 번역 → 용어집 (긴 것 먼저)."""
         for zh, name in self.zh_names:
-            # 한 글자 이름(空, 遥 등)은 일반 단어를 망가뜨리므로 조각 전체가 그 이름일 때만 바꾼다.
             if len(zh) > 1 or piece == zh:
                 piece = piece.replace(zh, name)
         piece = self.kr.get(piece, piece)
@@ -1131,7 +1016,6 @@ class Names:
         return piece
 
     def buff_label(self, id_cn, buff_id=0):
-        """'BUFF/00我方/05五星/卡塔斯·业火/共振2/音符抽牌标记' → '카타스·이그니스 / 공명2 / 노트드로우표식'."""
         cached = self.labels.get(id_cn) if id_cn else None
         if cached is not None:
             return cached
@@ -1150,7 +1034,6 @@ class Names:
         return label
 
     def buff_kind(self, buff_id, base_effect):
-        """버프 분류와 속성 목록: ('buff'|'debuff'|'other', ['attributeType·numberType', ...])."""
         cache_key = (buff_id, base_effect)
         cached = self.kinds.get(cache_key)
         if cached is not None:
@@ -1201,7 +1084,6 @@ class Names:
             self.edges = edges
 
     def _distances(self, role):
-        """캐릭터 레코드에서 게임 데이터 참조를 따라간 거리. 카드 주인을 정할 때 쓴다."""
         key = str(role)
         if key not in self.reach:
             if self.edges is None:
@@ -1220,15 +1102,223 @@ class Names:
         return self.reach[key]
 
     def owner(self, skill, roles):
-        """이 카드에 가장 가까운 캐릭터. 거리가 같으면 주인을 정하지 않는다."""
         ranked = sorted((self._distances(r).get(str(skill), 99), str(r)) for r in roles)
         if not ranked or ranked[0][0] == 99 or (len(ranked) > 1 and ranked[0][0] == ranked[1][0]):
             return None
         return ranked[0][1]
 
 
+class EffectBook:
+
+    PREFER = {"카드": 0, "일반 공격": 1, "돌파": 2, "공명": 3, "패시브": 4, "소환물": 5}
+
+    def __init__(self):
+        self.units, self.kw, self.eq, self.par, self.mod, self.mods = {}, {}, {}, {}, {}, []
+        try:
+            data = json.loads(read_data("data/effects.json"))
+            self.units, self.kw, self.eq = data.get("u") or {}, data.get("kw") or {}, data.get("eq") or {}
+            self.par, self.mod, self.mods = data.get("par") or {}, data.get("mod") or {}, data.get("mods") or []
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print("효과 이름표를 읽지 못했습니다:", exc, file=sys.stderr)
+
+    def kind_of(self, node):
+        index = self.mod.get(str(node))
+        return self.mods[index] if index is not None and index < len(self.mods) else ""
+
+    def ancestor_levels(self, node, wanted, depth=8):
+        out, frontier, seen = [], [str(node)], {str(node)}
+        for _ in range(depth):
+            following, level = [], set()
+            for n in frontier:
+                for p in self.par.get(n, ()):
+                    key = str(p)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if p in wanted:
+                        level.add(p)
+                    following.append(key)
+            if level:
+                out.append(level)
+            frontier = following
+            if not frontier:
+                break
+        return out
+
+
+    def nodes(self, role):
+        return (self.units.get(str(role)) or {}).get("n") or {}
+
+    def damage_ancestors(self, role):
+        n = self.nodes(role)
+        frontier = [k for k in n if self.kind_of(k) == "伤害"]
+        seen = set(frontier)
+        while frontier:
+            following = []
+            for k in frontier:
+                for p in self.par.get(k, ()):
+                    key = str(p)
+                    if key in n and key not in seen:
+                        seen.add(key)
+                        following.append(key)
+            frontier = following
+        return {k for k in seen if self.kind_of(k) not in ("Bullet", "FrameEvent", "UnitAction", "UnitState", "Card", "Skill", "Unit", "Controller", "Weather")}
+
+    def candidates(self, role, buff_id, source, who, credit):
+        u = self.units.get(str(role))
+        if not u:
+            return []
+        n = u.get("n") or {}
+        cands = list(n.get(str(buff_id)) or [])
+        if not cands:
+            return []
+        src = n.get(str(source)) if source and source != role else None
+        if src:
+            cands = [c for c in cands if c in src] or cands
+        if who:
+            s = (u.get("s") or {}).get(str(who))
+            if s is not None and s in cands:
+                cands = [s]
+        if len(cands) > 1 and credit:
+            kind, card = credit
+            feats = u.get("f") or []
+            if kind == "own":
+                c = (u.get("c") or {}).get(str(card))
+                if c in cands:
+                    cands = [c]
+                elif c is not None:
+                    cands = [x for x in cands if feats[x][0] == "소환물" and feats[x][4] == c] or cands
+            elif kind == "other":
+                cands = [c for c in cands if c in ((u.get("t") or {}).get(str(buff_id)) or ())] or cands
+            elif kind == "none":
+                cands = [c for c in cands if feats[c][0] != "카드"] or cands
+        feats = u.get("f") or []
+        return sorted(cands, key=lambda c: (self.PREFER.get(feats[c][0], 9), feats[c][1], c))
+
+    def feature_name(self, role, index):
+        f = ((self.units.get(str(role)) or {}).get("f") or [])[index]
+        kind, level, name, _card, _parent, link = f
+        if kind == "돌파":
+            return f"{name} (돌파 {level})", kind
+        if kind == "공명":
+            return f"{name} (공명 {level})", kind
+        if kind == "소환물":
+            return f"{name} (소환물)", kind
+        if kind == "카드" and link == "생성":
+            return f"{name} (생성 카드)", kind
+        if link and link != "생성":
+            return f"{name or kind} ({link} 연계)", kind
+        return name or kind, kind
+
+    def label(self, role, role_name, buff_id, source, who, credit, team_roles=None, summon_card=0):
+        kw = self.kw.get(str(buff_id))
+        if kw:
+            name, kind = kw
+            suffix = {"dot": " (지속 피해)", "zone": " (장판)"}.get(kind, "")
+            return (f"{name}{suffix}" if name else f"{role_name} 지속 피해"), "키워드", "exact"
+        cands = self.candidates(role, buff_id, source, who, credit)
+        if len(cands) == 1:
+            name, kind = self.feature_name(role, cands[0])
+            if kind == "소환물" and summon_card:
+                card = (self.units.get(str(role)) or {}).get("c", {}).get(str(summon_card))
+                if card is not None:
+                    name = f"{name[:-len(' (소환물)')]} ({self.feature_name(role, card)[0]} 소환물)" if name.endswith(" (소환물)") else name
+            return name, kind, "exact"
+        if cands:
+            names = list(dict.fromkeys(self.feature_name(role, c)[0] for c in cands))
+            return " / ".join(names), self.feature_name(role, cands[0])[1], "multi"
+        if str(buff_id) in self.eq:
+            return f"{self.eq[str(buff_id)]} (장비)", "장비", "exact"
+        for other, other_name in (team_roles or {}).items():
+            if other != role:
+                got = self.candidates(other, buff_id, source, None, None)
+                if got:
+                    name, kind = self.feature_name(other, got[0])
+                    return f"{name} ({other_name} 연계)", kind, "data"
+        return f"효과 {buff_id}", "기타", "data"
+
+
+TRACE_WINDOW = 600
+TRACE_NEAR = 180
+
+
+def trace_multi(book, battle):
+    names, hits = battle.get("effectList"), battle.get("dmgHits")
+    if not names or not hits or not book.par:
+        return 0
+    rows_of = {}
+    keys_of = {}
+    for hit in hits:
+        if hit[2]:
+            keys_of.setdefault(hit[3], set()).add(hit[2])
+            keys_of.setdefault(str(hit[2]), set()).add(hit[2])
+    roles = {hit[2] for hit in hits if hit[2]}
+    for f, sid, key, buff, src, _fsid in battle.get("allyHist") or []:
+        for role in (roles if key == "team" else keys_of.get(key, ())):
+            rows_of.setdefault(role, {}).setdefault(buff, []).append([f, sid, src, False])
+    for table in rows_of.values():
+        for rows in table.values():
+            rows.sort(key=lambda r: r[1])
+    levels_cache, index, fixed = {}, {(r[0], r[1]): i for i, r in enumerate(names)}, 0
+
+    def levels(role, node):
+        key = (role, node)
+        if key not in levels_cache:
+            levels_cache[key] = book.ancestor_levels(node, rows_of.get(role) or {})
+        return levels_cache[key]
+
+    def pick(role, node, at, fifo):
+        table = rows_of.get(role) or {}
+        for level in levels(role, node):
+            window = TRACE_WINDOW if fifo else TRACE_NEAR
+            rows = [r + [b] for b in level for r in table[b] if at - window <= r[0] <= at and not (fifo and r[3])]
+            if rows:
+                chosen = min(rows, key=lambda r: r[1]) if fifo else max(rows, key=lambda r: r[1])
+                if fifo:
+                    for r in table[chosen[4]]:
+                        if r[1] == chosen[1]:
+                            r[3] = True
+                return chosen
+        return None
+    spawned = {}
+    for hit in sorted(hits, key=lambda h: h[1]):
+        if hit[2] and book.kind_of(hit[5]) == "Bullet":
+            got = pick(hit[2], hit[5], hit[0], True)
+            if got:
+                spawned[hit[1]] = got
+    for hit in hits:
+        if not (0 <= hit[10] < len(names)) or names[hit[10]][3] != "multi":
+            continue
+        role = hit[2]
+        credit = ("own", hit[9]) if hit[9] > 0 else ("other", -hit[9]) if hit[9] < 0 else ("none", 0)
+        node_feats = book.nodes(role)
+        cands = book.candidates(role, hit[4], hit[5], hit[8], None if credit[0] == "none" else credit)
+        entry = spawned.get(hit[1])
+        if entry is None and book.kind_of(hit[5]) != "Bullet":
+            entry = pick(role, hit[5], hit[0], False)
+        for _ in range(8):
+            if entry is None or len(cands) <= 1:
+                break
+            f, _sid, src, _used, buff = entry
+            for node in (buff, src):
+                if node and node != role:
+                    cands = [c for c in cands if c in (node_feats.get(str(node)) or ())] or cands
+            node = src if src and src != role and str(src) in book.mod else buff
+            entry = pick(role, node, f, False) if len(cands) > 1 else None
+        if len(cands) > 1 and credit[0] == "none":
+            cands = [c for c in cands if c in book.candidates(role, hit[4], hit[5], hit[8], credit)] or cands
+        if len(cands) == 1:
+            name, kind = book.feature_name(role, cands[0])
+            i = index.get((role, name))
+            if i is None:
+                i = index[(role, name)] = len(names)
+                names.append([role, name, kind, "trace"])
+            hit[10] = i
+            fixed += 1
+    return fixed
+
+
 def read_card_prefs():
-    """레지스트리의 자동 사용 슬롯과 플래그를 뒤쪽 키 이름으로 돌려준다. 값 이름 전체는 남기지 않는다."""
     slots, flags = {}, {}
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, GAME_PREFS_KEY, 0, winreg.KEY_READ) as key:
         for index in range(winreg.QueryInfoKey(key)[1]):
@@ -1247,7 +1337,6 @@ def read_card_prefs():
 
 
 def parse_card_slots(slots):
-    """레지스트리의 슬롯 문자열을 해석한다. 내용이 없는 슬롯은 뺀다."""
     out = {}
     for key, text in slots.items():
         try:
@@ -1260,14 +1349,12 @@ def parse_card_slots(slots):
 
 
 def encode_code(data):
-    """게임 CompressData 와 같은 형식: base64(raw deflate(UTF-8 JSON)), level 6, memLevel 8."""
     packer = zlib.compressobj(6, zlib.DEFLATED, -15, 8, 0)
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return base64.b64encode(packer.compress(text) + packer.flush()).decode("ascii")
 
 
 def expected_weights(card_list):
-    """ApplyAICoreSet 이 extraCardWeightDic 에 넣는 값 (카드 id → 가중치. linkCardId 는 제외)."""
     out = {}
     for index, card in enumerate(card_list):
         card_id = int(card["id"])
@@ -1279,7 +1366,6 @@ def expected_weights(card_list):
 
 
 def pick_card_slot(slots, party, level_id=None, weights=None):
-    """이번 전투의 슬롯을 근거가 강한 순서로 고른다. 반환: (키, 슬롯, 근거). 못 고르면 키가 None."""
     party_set = set(party)
     rows = []
     for key, slot in slots.items():
@@ -1288,13 +1374,12 @@ def pick_card_slot(slots, party, level_id=None, weights=None):
         roles = {r for r in data.get("roleList") or [] if isinstance(r, int) and r > 0}
         rows.append((key, slot, owners, roles))
     level_key = f"LevelRoleList_{level_id}"
-    if weights:  # 전투 중 실제 AI 가중치와 전부 일치하면 그것이 답이다
+    if weights:
         ranks = {v for v in weights.values() if v != BAN_WEIGHT}
         exact = [row for row in rows if row[2] <= party_set
                  and all(weights.get(k) == v for k, v in expected_weights(row[1]["data"]["cardList"]).items())
                  and {v for v in expected_weights(row[1]["data"]["cardList"]).values() if v != BAN_WEIGHT} == ranks]
         if exact:
-            # 카드가 적은 슬롯은 앞부분만 우연히 같을 수 있다
             exact.sort(key=lambda row: (-len(row[1]["data"]["cardList"]), row[0] != level_key, row[3] != party_set))
             return exact[0][0], exact[0][1], "weights" if len(exact) == 1 else "weights-tie"
     for key, slot, owners, _roles in rows:
@@ -1315,7 +1400,6 @@ def pick_card_slot(slots, party, level_id=None, weights=None):
 
 
 def use_type_label(names, card_id, use_type):
-    """사용 방식 숫자의 뜻. web/app.js useOptions 와 같은 규칙이다."""
     if card_id == DISCARD_CARD:
         return DISCARD_LABELS.get(use_type)
     if use_type == 1:
@@ -1436,7 +1520,6 @@ def compare_auto_sets(registry, memory):
 
 
 def auto_use_spec(names, state, party, leader, level_id, warnings):
-    """spec.autoUse. code 는 게임의 클립보드 내보내기와 같은 형식의 문자열이다."""
     flags = state.flags or {}
     on = state.ai_last
     registry_on = flags["CardAIOn"] != 0 if isinstance(flags.get("CardAIOn"), int) else None
@@ -1489,7 +1572,7 @@ def auto_use_spec(names, state, party, leader, level_id, warnings):
     export = json.loads(slot["text"])
     if set(export.get("roleList") or []) != set(party):
         export["roleList"] = list(party)
-    if leader:  # 게임의 내보내기는 편성의 현재 리더를 header 로 쓴다
+    if leader:
         if export.get("header") not in (None, leader):
             warnings.append(f"레지스트리의 header({export['header']})가 이번 전투의 리더({leader})와 달라 리더로 고쳐 코드를 만들었습니다.")
         export["header"] = leader
@@ -1531,13 +1614,12 @@ def auto_use_spec(names, state, party, leader, level_id, warnings):
 
 
 def decode_unit_info(data, at, read_text):
-    """Replay.UnitInfo 구조체 하나. 미장착 칸은 None. 펫 능력치 칸은 장비가 없어도 채워지므로 따로 모은다."""
     out = {key: i32_at(data, at + offset) for key, offset in UNIT_INFO_INTS.items()}
     equips, pets = [], []
     for equip_slot, (id_at, lv_at, slot_ids, slot_values) in enumerate(UNIT_INFO_EQUIPS):
         equip_id = i32_at(data, at + id_at)
         options = []
-        for slot, (slot_id, slot_value) in enumerate(zip(slot_ids, slot_values)):  # slot 은 random_affix 번호와 같다
+        for slot, (slot_id, slot_value) in enumerate(zip(slot_ids, slot_values)):
             option_id = i32_at(data, at + slot_id)
             if option_id > 0:
                 row = {"slot": slot, "id": option_id, "valueSN": i64_at(data, at + slot_value)}
@@ -1550,7 +1632,6 @@ def decode_unit_info(data, at, read_text):
 
 
 def affix_display(info, value):
-    """옵션 수치를 화면 표기로 바꾼다: (표시값, 설명문). 수치가 없는 옵션은 표시값 None."""
     desc = (info or {}).get("desc")
     if not desc:
         return None, None
@@ -1575,7 +1656,6 @@ def option_kind(slot):
 
 
 def memory_options(names, item, mem):
-    """UnitInfo 의 옵션 칸. slot 은 random_affix 번호다. 수치가 없는 옵션은 메모리에 0 으로 들어간다."""
     out = []
     for row in mem["options"]:
         value = round(row["valueSN"] / 10000, 4) if row["valueSN"] else None
@@ -1586,7 +1666,6 @@ def memory_options(names, item, mem):
 
 
 def break_level_candidates(names, item, level, bonus):
-    """돌파로 오른 주 능력치가 bonus 인 돌파 단계들 (GetBreakMainAttr). 주 능력치를 올리지 않는 단계가 있어 여럿일 수 있다."""
     steps = names.equip_breaks.get(str(item.get("q"))) or []
     base = max(math.floor(item.get(flat, 0) + item.get(growth, 0) * (level - 1) + 1e-9)
                for flat, growth in (("atk", "gAtk"), ("def", "gDef"), ("hp", "gHp")))
@@ -1594,7 +1673,7 @@ def break_level_candidates(names, item, level, bonus):
     for stage in range(len(steps) + 1):
         if stage:
             if level < (steps[stage - 1].get("needLv") or 0):
-                break  # 이 단계는 장비 레벨이 모자라 돌파할 수 없다
+                break
             if steps[stage - 1].get("effect") == "MainAttrUp":
                 up += steps[stage - 1].get("add") or 0
         if math.floor(base * (1 + up) + 1e-9) - base == round(bonus):
@@ -1603,7 +1682,6 @@ def break_level_candidates(names, item, level, bonus):
 
 
 def equip_spec(names, slot, mem, bonus):
-    """장비 한 칸. bonus 는 돌파로 오른 주 능력치 (능력치 이름, 값) 또는 None."""
     if mem is None:
         return None
     item = names.equip_items.get(mem["id"])
@@ -1616,7 +1694,6 @@ def equip_spec(names, slot, mem, bonus):
 
 
 def parse_battle_tokens(raw):
-    """UnitInfo.extraSkills 를 순서대로 [(id, 값)] 으로. 값이 없는 조각(속성 강화 등급, 최종 스킬, 수치 없는 옵션)의 값은 None."""
     tokens = []
     for token in (raw or "").split("|"):
         parts = token.split(",")
@@ -1629,10 +1706,6 @@ def parse_battle_tokens(raw):
 
 
 def resonance_spec(names, role_id, unit, tokens):
-    """공명 강화. 게임이 전투에 넘긴 값에서 되짚는다 (GetRoleResonanceExSkillStr, GetRoleSkillLevel). 반환: (목록, 쓴 조각 id).
-
-    속성 강화와 skillActiveUpgrade 가 없는 스킬 강화는 extraSkills 에, 있는 스킬 강화는 skill1~3Lv (강화 레벨 + 1) 에 들어간다.
-    """
     values = dict(tokens)
     used = set()
     skill_levels = [unit["skill1Lv"], unit["skill2Lv"], unit["skill3Lv"]]
@@ -1672,7 +1745,6 @@ def resonance_spec(names, role_id, unit, tokens):
 
 
 def pet_bonus(unit):
-    """펫이 주는 능력치 (0 이 아닌 것만). 메모리를 못 읽었으면 None."""
     if unit is None:
         return None
     return [{"id": row["id"], "stat": PET_OPTIONS[row["id"]], "value": round(row["valueSN"] / 10000, 4), "valueSN": row["valueSN"]}
@@ -1680,7 +1752,6 @@ def pet_bonus(unit):
 
 
 def member_spec(names, role_id, order, unit, leader, attrs, warnings):
-    """spec.team 의 한 칸. 이번 전투에 실제로 들어간 메모리 값만 쓴다. 못 읽었으면 육성 항목은 비워 둔다."""
     out = {"order": order, "id": role_id, "name": names.role(role_id, ""), "leader": role_id == leader, "level": None, "breakthrough": None,
            "resonanceStage": None, "resonanceEnhance": None, "finalSkill": None, "teamwork": None, "skillLevels": None, "cardCounts": None,
            "unitViewId": None, "roleIndex": None, "equips": [None] * EQUIP_SLOTS, "equipExtraOptions": None, "petBonus": None,
@@ -1694,7 +1765,6 @@ def member_spec(names, role_id, order, unit, leader, attrs, warnings):
     final_id = (names.records.get(str(role_id)) or {}).get("finalSkill")
     if final_id:
         used.add(final_id)
-    # 장비 추가 옵션 중 4·5번은 UnitInfo 옵션 칸에도 있다. 펫이 그 칸을 차지하면 extraSkills 에만 남는다.
     in_slots = collections.Counter(row["id"] for equip in unit["equips"] if equip for row in equip["options"] if row["slot"] >= 4)
     bonuses, extras = {}, []
     for token, value in tokens:
@@ -1744,7 +1814,6 @@ SPEC_NOTES = {
 
 
 def compose_spec(names, state, battle):
-    """지금까지 모은 값으로 기록 파일의 spec 을 만든다. 계정 식별자는 넣지 않는다."""
     warnings = []
     replay = state.replay
     conditions = battle.get("conditions") or {}
@@ -1807,7 +1876,6 @@ def compose_spec(names, state, battle):
 
 
 def new_spec_state():
-    """전투 하나의 세부 스펙 수집 상태."""
     return types.SimpleNamespace(
         slots=None, flags=None, prefs_error=None, slot_key=None, slot_changed=False,
         replay=None, replay_error=None, weights=None, ai_settings=None, ai_pending=None, attrs=None, attrs_complete=False, attrs_frame=None, team_attrs=None,
@@ -1815,14 +1883,12 @@ def new_spec_state():
 
 
 def lineup_view(spec):
-    """화면용: 자동 사용 코드와 캐릭터별 레벨·장비만. 공명·팀워크·옵션·속성은 넣지 않는다."""
     if not isinstance(spec, dict):
         return None
     auto = spec.get("autoUse") or {}
     source = auto.get("source") or {}
     team = []
     for member in spec.get("team") or []:
-        # enabledInTeamPreset 은 specVersion 1 기록에만 있다
         equips = [{"id": e.get("id"), "name": e.get("name"), "lv": e.get("level")} if e and e.get("enabledInTeamPreset") is not False else None
                   for e in (member.get("equips") or [])[:EQUIP_SLOTS]]
         equips += [None] * (EQUIP_SLOTS - len(equips))
@@ -1836,7 +1902,6 @@ def cost_units(sn):
 
 
 def leader_percent(conditions):
-    """리더 조건들의 progress/max 평균 (%). 조건이 없으면 None."""
     if not conditions:
         return None
     ratios = [min(max(c["progress"] / c["max"], 0), 1) if c["max"] > 0 else 0 for c in conditions]
@@ -1844,7 +1909,6 @@ def leader_percent(conditions):
 
 
 def max_window(flow, seconds):
-    """flow 의 누적 피해에서 seconds 초 창의 최대 피해. 전투 도중에 켠 경우 그 전 누적분은 세지 않는다."""
     best, base, left = 0, (flow[0][6] if flow else 0), 0
     for row in flow:
         while flow[left][0] <= row[0] - seconds:
@@ -1855,7 +1919,6 @@ def max_window(flow, seconds):
 
 
 def last_window(flow, seconds):
-    """전투 마지막 seconds 초의 피해. 결과 화면 '10초 동안 총 피해'는 마지막 600프레임의 합이다."""
     if not flow:
         return 0
     start = flow[-1][0] - seconds
@@ -1863,10 +1926,6 @@ def last_window(flow, seconds):
 
 
 def estimate_used_cost(flow, cards):
-    """결과 화면 '사용한 비용' 추정: 카드를 쓰기 직전 손패 표본에서 읽은 비용의 합.
-
-    게임은 카드마다 지불 비용을 더한다. 같은 순간 돌려받은 비용이 막대에는 안 보이므로 막대 순감소보다 크다.
-    손패 표본의 비용은 근사값이고, 표본에 없던 카드(리더 제외)는 빼고 그 장수를 함께 돌려준다."""
     total, unknown, at = 0, 0, 0
     if not flow:
         return 0, 0
@@ -1884,7 +1943,6 @@ def estimate_used_cost(flow, cards):
 
 
 def summarize(battle):
-    """저장 파일과 화면에 쓰는 요약. 구버전 전투는 없는 값이 0 이 된다."""
     skills = list((battle.get("skills") or {}).values())
     cards = battle.get("cards") or []
     ledger = battle.get("ledger") or {}
@@ -1920,7 +1978,6 @@ def summarize(battle):
 
 
 def top_level_fields(text, wanted):
-    """JSON 객체의 최상위 키를 앞에서부터 읽어 wanted 만 모은다. 문자열이 잘렸으면 모은 데까지만 돌려준다."""
     decoder = json.JSONDecoder()
     separator, colon = re.compile(r"[\s,]*"), re.compile(r"\s*:\s*")
     out = {}
@@ -1941,7 +1998,6 @@ def top_level_fields(text, wanted):
 
 
 def party_of(battle):
-    """목록에 보여 줄 조합: 출전 순서대로 [{id, name, leader}]. 출전 순서가 없는 구버전 기록은 피해 순서."""
     roles = battle.get("roles") or {}
     conditions = battle.get("conditions") or {}
     order = [str(r) for r in conditions.get("roleOrder") or [] if str(r) in roles]
@@ -1952,14 +2008,12 @@ def party_of(battle):
 
 
 def battle_meta(battle, path):
-    """전투 목록의 한 줄. 파일 앞부분에서 읽은 필드만으로도 만들 수 있어야 한다."""
     return {"id": battle["id"], "server": battle.get("server"), "started": battle["started"], "live": bool(battle.get("live")),
             "total": sum(r.get("damage", 0) for r in battle["roles"].values()), "party": party_of(battle),
             "seconds": battle.get("game_duration") or (battle.get("frame") or 0) / 60, "path": path}
 
 
 def read_meta(path):
-    """이력 목록에 쓸 메타. 파일 앞부분만 읽고, 모자라면 전체를 읽는다."""
     try:
         with open(path, encoding="utf-8") as f:
             head = f.read(META_HEAD_CHARS)
@@ -1975,36 +2029,36 @@ class Meter:
     def __init__(self, log_dir):
         self.log_dir = Path(log_dir)
         self.names = Names()
+        self.effects = EffectBook()
         self.lock = threading.RLock()
         self.reader = None
         self.status = "게임을 찾는 중"
         self.error = ""
-        self.armed = True  # 측정 대기: 켜져 있는 동안 시작되는 전투만 기록한다. 켜면 바로 대기 (2026-11-16 — 그 전엔 꺼진 채 시작)
+        self.armed = True
         self.halted = False
-        self.blocked_pid = None  # 읽기가 막힌 게임의 pid (그 게임에는 다시 시도하지 않는다)
+        self.blocked_pid = None
         self.errors = 0
         self.pid_checked = 0.0
         self.current = None
         self.result = 0
-        self.closed = None  # (직전에 닫은 result 포인터, 닫을 때 프레임)
+        self.closed = None
         self.prev = None
-        self.history = []  # 메타만 둔다. 본문은 self.bodies 와 파일에 있다.
+        self.history = []
         self.bodies = collections.OrderedDict()
-        self.sent = self._load_sent()  # 서버에 보낸 기록 파일 이름
+        self.sent = self._load_sent()
         self._reset_battle()
         self._load_history()
         threading.Thread(target=self.names._build_edges, daemon=True).start()
 
     def _reset_battle(self):
-        """전투 하나를 기록하는 동안만 쓰는 상태."""
         self.cost_prev = None
         self.cost_before = 0
         self.pending_cost = 0
         self.unpaid = collections.deque()
-        self.spends = collections.deque()  # (프레임, 감소량 SN, 감소 후 비용 SN)
+        self.spends = collections.deque()
         self.card_count = 0
         self.op_count = 0
-        self.pending_ops = collections.deque()  # 아직 카드와 짝짓지 못한 조작 기록
+        self.pending_ops = collections.deque()
         self.tick_use, self.tick_passive = {}, {}
         self.flow_bucket = self.buff_bucket = self.condition_bucket = None
         self.buff_frame = None
@@ -2018,12 +2072,22 @@ class Meter:
         self.poll_sum = self.poll_max = self.poll_gap = 0.0
         self.poll_last = None
         self.wall_start = time.monotonic()
-        self.seen_frame = None  # 마지막으로 전부 읽은 게임 프레임
+        self.seen_frame = None
         self.full_at = 0.0
         self.frame_samples = self.frames_skipped = 0
-        self.action_state = {}  # 유닛 키 → 지금 기록 중인 동작 행
-        self.dot_state = {}  # 주기 효과 인스턴스 포인터 → (프레임 카운터, 간격, 본 프레임)
+        self.action_state = {}
+        self.dot_state = {}
         self.spec_state = None
+        self.hist_state = {}
+        self.history_ok = False
+        self.hist_overflow = 0
+        self.tick_card_deltas = []
+        self.credit_hits = collections.deque()
+        self.credit_cards = collections.deque()
+        self.credit_stats = {"matched": 0, "cardsUnmatched": 0, "ambiguous": 0}
+        self.effect_index = {}
+        self.known_nodes = (None, set())
+        self.log_bucket = {}
 
     def _load_history(self):
         files = sorted(self.log_dir.glob("*.json"), reverse=True)[:MAX_HISTORY] if self.log_dir.exists() else []
@@ -2052,7 +2116,6 @@ class Meter:
         self.reader, self.closed = None, None
 
     def _process_alive(self):
-        """3초마다 게임 프로세스가 그대로인지 확인한다."""
         now = time.monotonic()
         if now - self.pid_checked < PID_CHECK_SECONDS:
             return True
@@ -2082,7 +2145,6 @@ class Meter:
         return "측정 대기 중" if self.armed else "측정 안 함"
 
     def set_armed(self, on):
-        """측정 대기 켜기·끄기. 끄더라도 이미 기록 중인 전투는 끝까지 기록한다."""
         with self.lock:
             self.armed = bool(on)
             if not self.current and self.reader and self.reader.klass:
@@ -2092,14 +2154,14 @@ class Meter:
     def begin(self, ctx, snap):
         reader = self.reader
         reader.clear_caches()
-        snap = reader.snapshot(ctx.result) or snap  # 이전 전투의 문자열 캐시로 읽은 이름을 버린다.
+        snap = reader.snapshot(ctx.result) or snap
         self._reset_battle()
         now = time.time()
         battle = {
             "schemaVersion": SCHEMA_VERSION, "id": int(now * 1000), "server": SERVER, "build": reader.build(),
             "started": now, "ended": None, "live": True,
             "endReason": None, "game_duration": None, "pollHz": POLL_HZ,
-            "timeBase": "frame/60",  # 게임 타이머 기준. 시뮬 시각+3초≈게임 시각
+            "timeBase": "frame/60",
             "attrsUnit": "SN=값x10000", "startFrame": ctx.frame, "frame": ctx.frame, "state": ctx.state,
             "firstHitFrame": None, "first_hit": None, "last_hit": None, "gameTotalSN": 0,
             "conditions": {"leaderCardId": None, "leaderCard": None, "roleOrder": []},
@@ -2107,15 +2169,11 @@ class Meter:
             "ledger": {"openingSN": 0, "naturalSN": 0, "startSN": 0, "gainedSN": 0, "spentSN": 0, "otherSpentSN": 0,
                        "overflowSN": 0, "capFrames": 0, "frames": 0, "pendingSN": 0, "currentSN": 0},
             "flow": [], "leaderProgress": [], "units": {}, "buffEvents": [], "snapshots": [], "ops": [], "now": None,
-            # hits: [프레임, 캐릭터 id, 그 프레임의 피해 증가, 그중 카드에 귀속된 양]
-            # actions: [시작 프레임, 유닛 키, 동작 id, 카드 id, 플래그(1 일반 공격, 2 리더 스킬), 전체 프레임,
-            #           처음 본 진행 프레임, 마지막으로 진행한 프레임, 마지막 진행 프레임 값]
-            # dotTicks: [프레임, buff id, 건 캐릭터 id, 인스턴스, 틱 수] — 적에게 걸린 아군의 주기 효과가 틱을 낸 프레임
             "hits": [], "actions": [], "dotTicks": [],
+            "dmgHits": [], "allyHist": [], "effectList": [], "hitCheck": {},
             "summary": None, "metrics": {},
-            "spec": None,  # 목록은 파일 앞부분만 읽으므로 긴 필드는 뒤에 둔다
+            "spec": None,
         }
-        # 미터를 전투 도중에 켠 경우: 이미 쌓인 cardOrder 는 시각을 모르므로 주인 정보만 쓴다.
         for item in reader.card_order(snap["cardOrder"], 0):
             self._note_owner(battle, item)
             self.card_count += 1
@@ -2135,25 +2193,22 @@ class Meter:
 
     @staticmethod
     def _read_prefs(state):
-        """자동 사용 설정을 레지스트리에서 읽는다. 실패해도 기록은 계속한다."""
         try:
             texts, state.flags = read_card_prefs()
             state.slots = parse_card_slots(texts)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            state.prefs_error = type(exc).__name__  # 메시지에는 사용자 폴더 경로가 들어갈 수 있다
+            state.prefs_error = type(exc).__name__
 
     def _refresh_spec(self, battle, state):
-        """지금까지 모은 값으로 spec 을 다시 만든다. 어떤 실패도 전투 기록을 막지 않는다."""
         with self.lock:
             try:
                 battle["spec"] = compose_spec(self.names, state, battle)
-            except Exception as exc:  # noqa: BLE001 - 폴링 스레드까지 번지면 전투 기록이 끊긴다.
+            except Exception as exc:
                 print("세부 스펙을 만들지 못했습니다:", type(exc).__name__, file=sys.stderr)
                 battle["spec"] = {"specVersion": SPEC_VERSION, "autoUse": None, "team": [],
                                   "warnings": [f"세부 스펙을 만들지 못했습니다: {type(exc).__name__}"]}
 
     def _capture_spec(self, ctx):
-        """전투 시작 부근에 메모리의 세부 스펙을 읽는다. 다 읽었거나 60초가 지나면 멈춘다."""
         state = self.spec_state
         if state is None:
             return
@@ -2197,7 +2252,6 @@ class Meter:
         state.attrs_complete = bool(party) and party <= set(found)
 
     def _close_spec(self):
-        """전투가 끝날 때: 레지스트리가 바뀌었는지 보고, 마지막으로 spec 을 맞춘다."""
         state, battle = self.spec_state, self.current
         if state is None or battle is None:
             return
@@ -2217,7 +2271,6 @@ class Meter:
             battle["cardOwners"][str(item["id"])] = item["owner"]
 
     def _owner_of(self, card_id, snap):
-        """카드 주인: cardOrder 의 ownerId 우선, 없으면 게임 데이터 참조 거리."""
         owner = self.current["cardOwners"].get(str(card_id))
         if owner is not None and owner in snap["roles"]:
             return str(owner)
@@ -2233,7 +2286,7 @@ class Meter:
             return self.finish(reason="result_changed")
         now = time.monotonic()
         if ctx.frame == self.seen_frame and now - self.full_at < RECHECK_SECONDS:
-            return  # 같은 게임 프레임: 다시 읽지 않는다 (멈춰 있으면 RECHECK_SECONDS 마다 읽어 종료·일시정지를 본다)
+            return
         snap = reader.snapshot(ctx.result)
         if snap is None:
             return self.finish(reason="snapshot_lost")
@@ -2247,7 +2300,7 @@ class Meter:
                 self.update(ctx, snap)
                 self._note_poll(began)
         except TRANSIENT:
-            if not ended:  # 끝난 전투는 마지막 반영이 실패해도 닫아야 한다.
+            if not ended:
                 raise
             self.poll_errors += 1
         if ended:
@@ -2289,14 +2342,15 @@ class Meter:
         }
 
     def update(self, ctx, snap):
-        """한 틱의 기록. 각 단계는 자기 상태를 스스로 갱신하므로 중간에 실패해도 이중 집계되지 않는다."""
         cur, reader, frame = self.current, self.reader, ctx.frame
         cur["frame"], cur["state"] = frame, ctx.state
         self.tick_units = self.tick_unit_states = None
         new_cards = reader.card_order(snap["cardOrder"], self.card_count)
         for item in new_cards:
             self._note_owner(cur, item)
+        self.tick_card_deltas = []
         self.apply_damage(snap, frame)
+        self.apply_history(ctx, frame, snap)
         self.apply_actions(ctx, frame)
         self.apply_dots(ctx, frame)
         team = reader.property_values(ctx.team_property) or self.last_team
@@ -2316,7 +2370,7 @@ class Meter:
             self.buff_bucket = bucket
         bucket = frame // 60
         if bucket != self.condition_bucket:
-            self._read_conditions(ctx.result)  # 게임이 먼저 꺼져도 조건이 남도록 1초마다 읽어 둔다.
+            self._read_conditions(ctx.result)
             self.condition_bucket = bucket
         self._capture_spec(ctx)
 
@@ -2349,15 +2403,18 @@ class Meter:
             if auto:
                 tick_passive[key] = auto
             row["casts"].extend([frame, 0] for _ in range(used + auto))
-            delta = skill["dmg"] - old["dmg"]
-            if delta > 0:
+            delta = (skill["dmg"] - old["dmg"]) & 0xFFFFFFFF
+            if 0 < delta < 1 << 31:
+                row["dmgSum"] = row.get("dmgSum", 0) + delta
                 row["updates"] += 1
                 row["maxUpdate"] = max(row["maxUpdate"], delta)
-                if not row["casts"]:  # 사용·자동 횟수 없이 들어온 피해도 시전별 합계에서 빠지지 않게 한다.
+                if not row["casts"]:
                     row["casts"].append([frame, 0])
                 row["casts"][-1][1] += delta
-                cur["log"].append([t, row["name"], delta])
                 owner = self._owner_of(key, snap)
+                self.tick_card_deltas.append([frame, int(key), delta, int(owner) if owner else 0])
+                if not self.history_ok:
+                    cur["log"].append([t, row["name"], delta])
                 if owner:
                     owned[owner] = owned.get(owner, 0) + delta
         for key, delta in role_delta.items():
@@ -2367,16 +2424,226 @@ class Meter:
                 bucket = cur["byRole"].setdefault(role_key, {}).setdefault(second, [0, 0])
                 bucket[0] += delta
                 bucket[1] += attributed
-            rest = delta - attributed
-            if rest > 0:
-                cur["log"].append([t, cur["roles"][role_key]["name"] + " · 카드 외", rest])
             if delta:
                 cur["hits"].append([frame, key, delta, attributed])
         self.tick_use, self.tick_passive = tick_use, tick_passive
-        self.prev = snap  # 적용 직후 바로 갱신한다 (뒤 단계에서 실패해도 이중 집계 없음).
+        self.prev = snap
+
+    def apply_history(self, ctx, frame, snap):
+        cur, reader = self.current, self.reader
+        units = self._live_units(ctx)
+        by_sid = {u["sid"]: u for u in units if u["key"] != "team"}
+        by_ptr = {u["ptr"]: u for u in units if u["key"] != "team"}
+        roles = {int(k) for k in cur["roles"] if str(k).isdigit()}
+        if self.known_nodes[0] != roles:
+            known = set()
+            for role in roles:
+                known.update(self.effects.damage_ancestors(role))
+            self.known_nodes = (roles, known)
+        known = self.known_nodes[1]
+        hits = []
+        for unit in units:
+            head = reader.history_head(unit["buff"])
+            if head is None:
+                continue
+            queue, capacity, array, ptr, length = head
+            state = self.hist_state.get(unit["key"])
+            ally = unit["key"] == "team" or unit["team"] == ALLY_TEAM
+            if ally and state is not None and state[0] == queue and state[1] == ptr and state[2] == length:
+                continue
+            last_sid = state[3] if state is not None and state[0] == queue else 0
+            entries = reader.history_slots(array, 0, length, capacity)
+            if entries is None:
+                continue
+            new = sorted(e for e in entries if e[0] > last_sid)
+            try:
+                if ally:
+                    rows = [[f, sid, unit["key"], buff_id, source, from_sid] for sid, f, buff_id, source, from_sid, _b, _a in new if str(buff_id) in known]
+                    got = []
+                else:
+                    rows, got = [], self._hits_of(unit, new, by_sid, by_ptr, roles)
+            except TRANSIENT:
+                self.poll_errors += 1
+                continue
+            if last_sid and len(new) >= capacity:
+                self.hist_overflow += 1
+            self.hist_state[unit["key"]] = [queue, ptr, length, new[-1][0] if new else last_sid]
+            self.history_ok = True
+            cur["allyHist"].extend(rows)
+            hits += got
+        if hits or self.tick_card_deltas:
+            self._attribute(hits, frame, snap)
+
+    @staticmethod
+    def _role_of(attacker, by_ptr, roles):
+        unit, who, card = attacker, 0, 0
+        for _ in range(4):
+            if unit is None:
+                break
+            if unit["id"] in roles and unit["team"] == ALLY_TEAM:
+                return unit["id"], who, card
+            if not who:
+                who, card = unit["id"], unit.get("summonCard", 0) if 10000000 < unit.get("summonCard", 0) < 20000000 else 0
+            unit = by_ptr.get(unit.get("owner"))
+        return 0, who, card
+
+    def _hits_of(self, target, entries, by_sid, by_ptr, roles):
+        rows, stack = [], []
+        for sid, f, buff_id, source, from_sid, before, after in entries:
+            if after > before:
+                stack.clear()
+                continue
+            inner = 0
+            while stack and stack[-1][2] == f and stack[-1][1] >= after and stack[-1][0] <= before:
+                b0, a0, _f0 = stack.pop()
+                inner += b0 - a0
+            stack.append((before, after, f))
+            own = before - after - inner
+            if own <= 0:
+                continue
+            attacker = by_sid.get(from_sid)
+            role, who, summon_card = self._role_of(attacker, by_ptr, roles)
+            dmg = own // 10000 if own % 10000 == 0 else round(own / 10000)
+            rows.append([f, sid, role, attacker["key"] if attacker else "", buff_id, source, dmg, target["key"], who, None, -1, summon_card])
+        return rows
+
+    def _attribute(self, hits, frame, snap):
+        cur = self.current
+        cur["dmgHits"].extend(hits)
+        self.credit_hits.extend(hits)
+        self.credit_cards.extend(self.tick_card_deltas)
+        for hit in hits:
+            if self._needs_credit(hit):
+                continue
+            self._label(hit, None)
+        self._match_credits(frame, final=False)
+
+    def _needs_credit(self, hit):
+        role = hit[2]
+        if not role or str(hit[4]) in self.effects.kw:
+            return False
+        return len(self.effects.candidates(role, hit[4], hit[5], hit[8], None)) > 1
+
+    def _match_credits(self, frame, final):
+        pending = [h for h in self.credit_hits if h[9] is None]
+        for card in sorted(list(self.credit_cards), key=lambda c: -c[2]):
+            picked = None
+            for low in (card[0], card[0] - 2, card[0] - CREDIT_FRAMES):
+                picked = self._subset([h for h in pending if low <= h[0] <= card[0]], card[2])
+                if picked is not None:
+                    break
+            if picked is None:
+                continue
+            if picked is False:
+                self.credit_stats["ambiguous"] += 1
+                continue
+            owner = card[3]
+            for hit in picked:
+                hit[9] = card[1] if owner and owner == hit[2] else -card[1]
+                pending.remove(hit)
+                if hit[10] < 0:
+                    self._label(hit, ("own" if hit[9] > 0 else "other", card[1]))
+            self.credit_cards.remove(card)
+            self.credit_stats["matched"] += 1
+        horizon = None if final else frame - CREDIT_FRAMES
+        while self.credit_cards and (horizon is None or self.credit_cards[0][0] < horizon):
+            self.credit_cards.popleft()
+            self.credit_stats["cardsUnmatched"] += 1
+        while self.credit_hits and (horizon is None or self.credit_hits[0][0] < horizon):
+            hit = self.credit_hits.popleft()
+            if hit[9] is None:
+                hit[9] = 0
+                if hit[10] < 0:
+                    self._label(hit, ("none", 0))
+            elif hit[10] < 0:
+                self._label(hit, None)
+
+    @staticmethod
+    def _subset(pool, target):
+        items = sorted((h for h in pool if 0 < h[6] <= target), key=lambda h: -h[6])
+        found, nodes = [], [0]
+
+        def sig(chosen):
+            return tuple(sorted((h[2], h[4], h[5], h[6], h[8]) for h in chosen))
+
+        def walk(start, left, chosen):
+            if left == 0:
+                s = sig(chosen)
+                if not any(s == f[0] for f in found):
+                    found.append((s, list(chosen)))
+                return len(found) > 1
+            nodes[0] += 1
+            if nodes[0] > CREDIT_NODES:
+                return True
+            prev = None
+            for i in range(start, len(items)):
+                h = items[i]
+                key = (h[2], h[4], h[5], h[6], h[8])
+                if h[6] > left or key == prev:
+                    continue
+                prev = key
+                chosen.append(h)
+                if walk(i + 1, left - h[6], chosen):
+                    return True
+                chosen.pop()
+            return False
+        walk(0, target, [])
+        if nodes[0] > CREDIT_NODES and len(found) <= 1:
+            return None
+        if not found:
+            return None
+        return False if len(found) > 1 else found[0][1]
+
+    def _label(self, hit, credit):
+        cur = self.current
+        role, buff_id, source, dmg, who = hit[2], hit[4], hit[5], hit[6], hit[8]
+        role_row = cur["roles"].get(str(role)) or {}
+        team = {int(k): v.get("name", "") for k, v in cur["roles"].items() if str(k).isdigit()}
+        summon_card = hit[11] if len(hit) > 11 else 0
+        name, kind, how = self.effects.label(role, role_row.get("name", ""), buff_id, source, who, credit, team, summon_card) if role else ("때린 유닛 미확인", "기타", "data")
+        key = (role, name)
+        index = self.effect_index.get(key)
+        if index is None:
+            index = self.effect_index[key] = len(cur["effectList"])
+            cur["effectList"].append([role, name, kind, how])
+        hit[10] = index
+        t_frame = hit[0]
+        label = f"{role_row.get('name', '?')} · {name}"
+        bucket = self.log_bucket.get((t_frame, label))
+        if bucket is None:
+            bucket = self.log_bucket[(t_frame, label)] = [round(t_frame / 60, 2), label, 0]
+            cur["log"].append(bucket)
+            if len(self.log_bucket) > 4096:
+                self.log_bucket.clear()
+        bucket[2] += dmg
+
+    def effects_view(self, battle):
+        hits, names = battle.get("dmgHits"), battle.get("effectList")
+        if not hits or names is None:
+            return None
+        out = {}
+        for hit in hits:
+            index = hit[10] if len(hit) > 10 else -1
+            role, name, kind, how = names[index] if 0 <= index < len(names) else (hit[2], "판별 중", "기타", "multi")
+            row = out.setdefault(str(role), {}).setdefault(name, {"name": name, "kind": kind, "how": how, "value": 0, "hits": 0})
+            row["value"] += hit[6]
+            row["hits"] += 1
+        return {role: sorted(rows.values(), key=lambda r: -r["value"]) for role, rows in out.items()}
+
+    def _hit_check(self, battle):
+        totals = {}
+        unknown = 0
+        for hit in battle.get("dmgHits") or []:
+            if hit[2]:
+                totals[str(hit[2])] = totals.get(str(hit[2]), 0) + hit[6]
+            else:
+                unknown += hit[6]
+        roles = {key: [row.get("damage", 0), totals.get(key, 0)] for key, row in battle["roles"].items()}
+        multi = sum(1 for hit in battle.get("dmgHits") or [] if 0 <= hit[10] < len(battle["effectList"]) and battle["effectList"][hit[10]][3] == "multi")
+        return {"hits": len(battle.get("dmgHits") or []), "byRole": roles, "unknownRoleDamage": unknown, "overflow": self.hist_overflow,
+                "multiHits": multi, "credit": dict(self.credit_stats), "historyRead": self.history_ok}
 
     def apply_actions(self, ctx, frame):
-        """유닛마다 지금 하는 동작을 본다. 동작이 바뀌면 actions 에 한 줄을 열고, 진행하는 동안 끝 프레임을 갱신한다."""
         cur, reader, states = self.current, self.reader, self.action_state
         for unit in self._live_units(ctx):
             if unit["key"] == "team":
@@ -2396,10 +2663,6 @@ class Meter:
                 state["row"][7], state["row"][8] = frame, progress
 
     def apply_dots(self, ctx, frame):
-        """적에게 걸린 아군의 주기 효과가 낸 틱을 기록한다.
-
-        BuffDot 의 프레임 카운터는 0 → 간격-1 까지 오르고 틱을 내는 프레임에 0 으로 돌아간다 (2026-11-09 실측: 59 → 0).
-        같은 효과를 다시 걸어 카운터가 중간에 처음부터 다시 시작한 경우(예: 47 → 1)는 틱이 아니다."""
         cur, reader, states = self.current, self.reader, self.dot_state
         units = self._live_units(ctx)
         allies = {unit["sid"]: unit["id"] for unit in units if unit["key"] != "team" and unit["team"] == ALLY_TEAM}
@@ -2412,17 +2675,14 @@ class Meter:
                 last = states.get(pointer)
                 states[pointer] = (count, interval, frame)
                 owner = allies.get(from_sid)
-                # 처음 본 인스턴스와 간격이 막 바뀐 프레임(생성 직후)은 건너뛴다.
                 if owner is None or interval <= 0 or last is None or last[1] != interval:
                     continue
-                # 카운터가 줄었고, 지난 프레임 수만큼 더하면 간격에 닿았을 때만 틱이다.
                 if count < last[0] and last[0] + (frame - last[2]) >= interval:
                     cur["dotTicks"].append([frame, buff_id, owner, pointer & 0xFFFFFF, 1])
         for pointer in [p for p in states if p not in seen]:
             del states[pointer]
 
     def apply_cost(self, ctx, team, frame):
-        """비용 장부. 항상 opening + natural + start + gained - spent + pending == 현재 비용 이다."""
         ledger = self.current["ledger"]
         state = {"costSN": ctx.cost, "maxSN": ctx.max_cost, "startIndexSN": ctx.start_index,
                  "restoreSN": team.get("CostRestore", 0), "frame": frame}
@@ -2441,8 +2701,6 @@ class Meter:
         expected = prev["costSN"] + natural + start_gain
         overflow = max(expected - room, 0)
         expected -= overflow
-        # 넘침이 자연 회복보다 크면 그 초과분을 시작 비용에서 먼저 빼고, 그래도 남으면(상한이 줄어든 경우)
-        # 미확정분으로 돌린다. 이렇게 해야 장부의 합이 실제 비용과 항상 맞는다.
         excess = max(overflow - natural, 0)
         ledger["naturalSN"] += max(natural - overflow, 0)
         ledger["startSN"] += max(start_gain - excess, 0)
@@ -2491,7 +2749,6 @@ class Meter:
                     "ownerName": owner_name, "shown": item["shown"], "paid": 0 if auto else None, "before": before,
                     "after": after, "leader": item["leader"], "auto": auto, "noCost": item["noCost"], "hand": hand,
                     "target": None, "pos": pos, "ai": ai}
-            # 게임 조작 기록은 손으로·AI 로 쓴 카드만 남는다고 보고, 자동 발동이 아닌 카드부터 순서대로 짝짓는다.
             if not auto and self.pending_ops:
                 card["target"] = self.pending_ops.popleft()
             cur["cards"].append(card)
@@ -2504,14 +2761,12 @@ class Meter:
                                              "units": self._unit_states(ctx)})
                 except TRANSIENT:
                     self.poll_errors += 1
-        # 짝이 남은 조작 기록은 이번 틱의 자동 발동 카드에 순서대로 붙인다 (그래도 남으면 ops 에만 남는다).
         if self.pending_ops:
             for card in reversed(cur["cards"][-len(new_cards):]):
                 if card["target"] is None and self.pending_ops:
                     card["target"] = self.pending_ops.popleft()
 
     def _take_operations(self, ctx, frame):
-        """새 조작 기록을 ops 에 적고, 카드 사용 기록(cardIndex>=0)은 카드와 짝지을 대기열에 넣는다."""
         try:
             new_ops = self.reader.operation_logs(ctx.replay_manager, self.op_count)
         except TRANSIENT:
@@ -2524,12 +2779,10 @@ class Meter:
             self.current["ops"].append(row)
             if op["cardIndex"] >= 0 and op["team"] == ALLY_TEAM:
                 self.pending_ops.append({"op": row["i"], "frame": op["frame"], "x": op["x"], "z": op["z"], "uid": op["uid"]})
-        # 너무 오래 짝을 못 찾은 기록은 버린다 (카드 기록이 누락된 경우)
         while self.pending_ops and frame - self.pending_ops[0]["frame"] > SETTLE_FRAMES * 4:
             self.pending_ops.popleft()
 
     def _unit_positions(self, ctx):
-        """이번 틱 유닛별 [팀, x_SN, z_SN, roleIndex, 생존]. 카드 대상 좌표를 유닛과 맞춰 보기 위한 것."""
         try:
             return {u["key"]: [u["team"], u["x"], u["z"], u["roleIndex"], int(u["alive"])]
                     for u in self._live_units(ctx) if u["key"] != "team"}
@@ -2538,7 +2791,6 @@ class Meter:
             return None
 
     def settle(self, frame):
-        """카드와 비용 감소를 앞에서부터 1:1 로 짝짓는다. frame 이 None 이면 남은 것을 전부 마감한다."""
         ledger = self.current["ledger"]
         while self.unpaid and self.spends:
             card = self.unpaid.popleft()
@@ -2560,7 +2812,6 @@ class Meter:
                 self.current["leaderProgress"].append([frame, *state])
 
     def sample_flow(self, ctx, snap, frame, team, system):
-        """0.1초 표본. 앞 8칸은 시뮬 타임라인과 같은 순서다."""
         cur, reader, names = self.current, self.reader, self.names
         hand = [[names.skill(c["id"], c["name"]), cost_units(c["cost"]), c["id"]]
                 for c in reader.hand_cards(u64_at(system, 0x80), reader.dict_int_long(ctx.adjust_cost))]
@@ -2595,7 +2846,6 @@ class Meter:
             self.current["conditions"].update(values)
 
     def _unit_key(self, pointer, unit_id):
-        """유닛 키는 id 문자열이고, 같은 id 가 또 나오면 'id#2'. 포인터별로 고정한다."""
         known = self.unit_keys.get(pointer)
         if known and known[0] == unit_id:
             return known[1]
@@ -2606,7 +2856,6 @@ class Meter:
         return key
 
     def _live_units(self, ctx):
-        """이번 틱의 유닛 목록. 팀 전체 효과는 'team' 가상 유닛으로 넣는다."""
         if self.tick_units is not None:
             return self.tick_units
         reader, names = self.reader, self.names
@@ -2617,12 +2866,12 @@ class Meter:
                 units.append({"key": self._unit_key(pointer, ca[0]), "id": ca[0], "name": names.role(ca[0], ca[1]),
                               "team": team, "buff": u64_at(raw, 0x440), "property": u64_at(raw, 0x230),
                               "x": i64_at(raw, 0x270), "z": i64_at(raw, 0x2A8), "roleIndex": i32_at(raw, 0xAC),
-                              "alive": bool(raw[0x330]), "action": u64_at(raw, 0x260), "sid": i32_at(raw, 0x47C)})
+                              "alive": bool(raw[0x330]), "action": u64_at(raw, 0x260), "sid": i32_at(raw, 0x47C),
+                              "ptr": pointer, "owner": u64_at(raw, 0x4A8), "summonCard": i32_at(raw, 0x4B0)})
         self.tick_units = units
         return units
 
     def _unit_states(self, ctx):
-        """시전 순간의 스냅샷 본문 (속성은 0 이 아닌 것 전부, SN 원값). 같은 틱에는 한 번만 읽는다."""
         if self.tick_unit_states is None:
             reader, states = self.reader, {}
             for unit in self._live_units(ctx):
@@ -2635,7 +2884,6 @@ class Meter:
         return self.tick_unit_states
 
     def sample_buffs(self, ctx, frame):
-        """0.2초 표본: 버프별 유지 프레임·중첩을 누적하고 중첩 변화를 이벤트로 남긴다."""
         cur, reader, names = self.current, self.reader, self.names
         dt = frame - self.buff_frame if self.buff_frame is not None else 0
         self.buff_frame = frame
@@ -2665,7 +2913,7 @@ class Meter:
                     cur["buffEvents"].append([frame, unit["key"], buff_id, before, after, info["left"]])
             self._close_buffs(row, active, frame)
         for key, row in cur["units"].items():
-            if key not in seen:  # 목록에서 사라진 유닛의 버프도 끝난 것으로 본다.
+            if key not in seen:
                 self._close_buffs(row, {}, frame)
         self.buff_samples += 1
 
@@ -2686,6 +2934,11 @@ class Meter:
                 self._read_conditions(self.result)
             except TRANSIENT:
                 self.poll_errors += 1
+            self._match_credits(cur["frame"], final=True)
+            traced = trace_multi(self.effects, cur)
+            cur["hitCheck"] = self._hit_check(cur)
+            cur["hitCheck"]["traced"] = traced
+            cur["effects"] = self.effects_view(cur)
             cur["live"] = False
             cur["ended"] = time.time()
             cur["endReason"] = reason
@@ -2697,7 +2950,7 @@ class Meter:
             self.status = self.waiting_status()
             total = sum(r["damage"] for r in cur["roles"].values())
             if total <= 0:
-                self.closed = None  # 버린 전투는 닫은 것으로 치지 않는다 (전투가 이어지면 다시 기록).
+                self.closed = None
                 return
             stamp = datetime.fromtimestamp(cur["started"]).strftime("%Y%m%d-%H%M%S")
             path = self.log_dir / f"{stamp}.json"
@@ -2707,9 +2960,6 @@ class Meter:
         self._save(cur, path)
 
     def delete_battle(self, battle_id):
-        """끝난 전투 하나를 목록과 기록 폴더에서 지운다. 진행 중인 전투는 지우지 않는다.
-
-        파일이 이미 없어도 목록에서는 빼서, 폴더에서 직접 지운 기록도 이 버튼으로 정리할 수 있게 한다."""
         with self.lock:
             if self.current and str(self.current["id"]) == battle_id:
                 return False
@@ -2721,7 +2971,6 @@ class Meter:
             path = meta.get("path")
         if path:
             target = Path(path)
-            # 기록 폴더 안의 .json 만 지운다.
             if target.suffix == ".json" and target.resolve().parent == self.log_dir.resolve():
                 try:
                     target.unlink(missing_ok=True)
@@ -2737,7 +2986,6 @@ class Meter:
             return set()
 
     def _battle_file(self, battle_id):
-        """끝난 전투의 기록 파일 경로. 진행 중이거나 목록에 없으면 None."""
         with self.lock:
             if self.current and str(self.current["id"]) == battle_id:
                 return None
@@ -2745,7 +2993,6 @@ class Meter:
             return Path(meta["path"]) if meta and meta.get("path") else None
 
     def upload_battle(self, battle_id):
-        """끝난 전투 하나의 기록 파일을 기록 받는 서버에 보낸다. 화면에 보일 결과를 돌려준다(자세한 이유는 detail)."""
         path = self._battle_file(battle_id)
         if not path or not path.is_file():
             return {"ok": False, "detail": "no saved file (live battle or missing)"}
@@ -2769,7 +3016,7 @@ class Meter:
             APPDIR.mkdir(parents=True, exist_ok=True)
             SENT_FILE.write_text(json.dumps(names), encoding="utf-8")
         except OSError:
-            pass  # 보낸 표시만 못 남긴 것이라 전송 결과는 그대로 돌려준다.
+            pass
         return {"ok": True, "duplicate": bool(reply.get("duplicate"))}
 
     def _cache_body(self, key, battle):
@@ -2779,7 +3026,6 @@ class Meter:
             self.bodies.popitem(last=False)
 
     def _save(self, battle, path):
-        """임시 파일에 쓴 뒤 교체해 잘린 파일이 남지 않게 한다."""
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             temporary = path.with_suffix(".tmp")
@@ -2789,7 +3035,6 @@ class Meter:
             self.error = f"전투 기록을 저장하지 못했습니다: {exc}"
 
     def _step(self, action):
-        """한 단계를 실행한다. 포인터가 잠깐 어긋나서 난 오류는 삼키고, 40회 연속이면 표시한다."""
         try:
             action()
         except TRANSIENT as exc:
@@ -2806,7 +3051,6 @@ class Meter:
         while True:
             try:
                 if self.halted:
-                    # 읽기가 막힌 그 게임에는 다시 시도하지 않는다. 게임을 새로 켰을 때만(pid 가 다름) 다시 붙는다.
                     time.sleep(PID_CHECK_SECONDS)
                     pid = find_pid()
                     if pid and pid != self.blocked_pid:
@@ -2824,7 +3068,6 @@ class Meter:
                     if not self.current:
                         time.sleep(IDLE_SECONDS)
             except PermissionError as exc:
-                # 읽기가 막히면 오류만 표시하고 멈춘다. 다시 시도하거나 우회하지 않는다.
                 self.blocked_pid = self.reader.pid if self.reader else find_pid()
                 self.detach("read_blocked")
                 self.status, self.error, self.halted = "읽기 권한 없음", str(exc), True
@@ -2837,7 +3080,6 @@ class Meter:
                 time.sleep(3)
 
     def _find_battle(self, battle_id):
-        """요청한 전투의 본문: 진행 중 → 캐시 → 파일 순서. 파일은 잠금 밖에서 읽는다."""
         with self.lock:
             if self.current and (not battle_id or str(self.current["id"]) == battle_id):
                 return self.current
@@ -2862,7 +3104,6 @@ class Meter:
         return body
 
     def _owners(self, battle):
-        """카드 주인 표. cardOrder 의 ownerId 우선, 없으면 게임 데이터 참조 거리로 정한다."""
         roles = [r["id"] for r in (battle.get("roles") or {}).values()]
         known = {str(r) for r in roles}
         table = battle.get("cardOwners") or {}
@@ -2901,7 +3142,6 @@ class Meter:
 
     @staticmethod
     def _buff_events(battle, unit, table):
-        """한 유닛의 마지막 중첩 변화 [t, 라벨, 이전, 이후, 남은 프레임]. unit 이 없으면 첫 유닛."""
         keys = [row["key"] for row in table]
         key = unit if unit in keys else (keys[0] if keys else None)
         if key is None:
@@ -2916,8 +3156,8 @@ class Meter:
         return [[round(e[0] / 60, 2), stats[str(e[2])]["label"], e[3], e[4], e[5]] for e in reversed(picked)]
 
     def _battle_view(self, battle, unit):
-        # spec 은 AI 모델용 세부 스펙이다. 화면에는 lineup 에 고른 값만 보낸다. setup 은 옛 기록에만 있다.
-        hidden = ("flow", "buffEvents", "snapshots", "byRole", "units", "setup", "spec", "ops", "hits", "actions", "dotTicks")
+        hidden = ("flow", "buffEvents", "snapshots", "byRole", "units", "setup", "spec", "ops", "hits", "actions", "dotTicks",
+                  "dmgHits", "allyHist", "effectList")
         view = {key: value for key, value in battle.items() if key not in hidden}
         skills = {}
         for key, row in (battle.get("skills") or {}).items():
@@ -2925,13 +3165,15 @@ class Meter:
             if "casts" in row:
                 item["castCount"] = len(row["casts"])
                 item["maxCast"] = max((c[1] for c in row["casts"]), default=0)
+                item.setdefault("dmgSum", sum(c[1] for c in row["casts"]))
             skills[key] = item
+        if battle.get("dmgHits"):
+            view["effects"] = battle.get("effects") if not battle.get("live") and battle.get("effects") else self.effects_view(battle)
+            view["hitCheck"] = battle.get("hitCheck") if not battle.get("live") else None
         table = self._buff_table(battle)
         view.update(
             skills=skills, owners=self._owners(battle), log=(battle.get("log") or [])[-LOG_TO_VIEW:],
-            # pos·ai 는 분석용이라 화면에는 보내지 않는다.
             cards=[{k: v for k, v in c.items() if k not in ("pos", "ai")} for c in (battle.get("cards") or [])[-CARDS_TO_VIEW:]],
-            # 요약 항목이 늘기 전에 저장된 기록은 다시 계산해서 보여 준다.
             summary=summarize(battle) if battle.get("live") or "last10s" not in (battle.get("summary") or {}) else battle["summary"],
             ledger=battle.get("ledger"), now=battle.get("now"), series=self._series(battle), buffs=table,
             buffEvents=self._buff_events(battle, unit, table), lineup=lineup_view(battle.get("spec")),
@@ -2939,9 +3181,6 @@ class Meter:
         return view
 
     def view(self, battle_id="", unit="", listing=False):
-        """화면용 응답을 UTF-8 JSON 바이트로 돌려준다. 직렬화까지 잠금 안에서 끝낸다.
-
-        listing 이면 메인 화면용 전투 목록만 담고, 전투를 지정하면 그 전투 본문만 담는다."""
         body = None if listing else self._find_battle(battle_id)
         with self.lock:
             battles = []
@@ -2952,7 +3191,7 @@ class Meter:
             if body:
                 try:
                     battle = self._battle_view(body, unit)
-                except TRANSIENT as exc:  # 형식이 어긋난 기록 파일 하나 때문에 화면 전체가 끊기지 않게 한다.
+                except TRANSIENT as exc:
                     error = error or f"전투 기록을 표시하지 못했습니다: {exc!r}"
             payload = {"status": self.status, "active": self.current is not None, "armed": self.armed, "halted": self.halted, "error": error, "now": time.time(),
                        "server": {"id": SERVER, "name": SERVERS[SERVER]["name"]} if self.reader else None,
@@ -2997,19 +3236,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(METER.view(query.get("battle", [""])[0], query.get("unit", [""])[0], listing))
         portrait = PORTRAIT_PATH.fullmatch(url.path)
         equip = EQUIP_ICON_PATH.fullmatch(url.path)
-        if ASSETS and (portrait or equip):
-            data = ASSETS.get(f"unit/{portrait.group(1)}" if portrait else f"equip/{equip.group(1)}")
-            return self._send(data, "image/webp", cache="max-age=86400") if data else self._send(b"not found", "text/plain", 404)
-        image = (ICON_FILE if url.path == "/icon.png" else PORTRAIT_DIR / f"{portrait.group(1)}.webp" if portrait
-                 else EQUIP_ICON_DIR / f"{equip.group(1)}.webp" if equip else None)
-        if image and not image.is_file() and (portrait or equip):
-            image = EXTRA_IMAGE_DIR / ("unit" if portrait else "equip") / image.name
-        if image and image.is_file():
-            return self._send(image.read_bytes(), "image/png" if image == ICON_FILE else "image/webp", cache="max-age=86400")
+        name = "ui/icon.png" if url.path == "/icon.png" else f"unit/{portrait.group(1)}" if portrait else f"equip/{equip.group(1)}" if equip else None
+        data = ASSETS.get(name) if ASSETS and name else None
+        if data:
+            return self._send(data, "image/png" if name == "ui/icon.png" else "image/webp", cache="max-age=86400")
         return self._send(b"not found", "text/plain", 404)
 
     def do_POST(self):
-        origin = self.headers.get("Origin")  # 다른 웹페이지가 미터를 조작하지 못하게 한다.
+        origin = self.headers.get("Origin")
         if not self._host_ok() or (origin and origin.split("//")[-1] != self.headers.get("Host")):
             return self._send(b"forbidden", "text/plain", 403)
         url = urlparse(self.path)
@@ -3020,7 +3254,6 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/delete":
             return self._send(json.dumps({"ok": METER.delete_battle(query.get("battle", [""])[0])}).encode("utf-8"))
         if url.path == "/api/quit":
-            # 읽기가 막혀 멈춘 미터만 물러난다: 관리자 권한으로 다시 켠 미터가 이 자리를 넘겨받는다 (main 의 take_over).
             if METER.halted:
                 threading.Timer(0.2, os._exit, [0]).start()
             return self._send(json.dumps({"ok": METER.halted}).encode("utf-8"))
@@ -3032,7 +3265,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def meter_windows():
-    """떠 있는 미터 창들 (제목으로 찾는다. 최소화한 창도 들어간다)."""
     user32 = ctypes.windll.user32
     proc = ctypes.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
     user32.EnumWindows.argtypes = [proc, W.LPARAM]
@@ -3052,7 +3284,6 @@ def meter_windows():
 
 
 def set_topmost(on):
-    """미터 자신의 창만 항상 위로 고정하거나 해제한다."""
     user32 = ctypes.windll.user32
     user32.SetWindowPos.argtypes = [W.HWND, W.HWND] + [ctypes.c_int] * 4 + [W.UINT]
     found = meter_windows()
@@ -3083,7 +3314,6 @@ def open_window(url):
 
 
 def pin_window():
-    """창이 뜰 때까지 최대 10초 기다렸다가 항상 위로 고정한다."""
     for _ in range(40):
         if set_topmost(True):
             return
@@ -3091,7 +3321,6 @@ def pin_window():
 
 
 def running_meter(port):
-    """이 포트에서 이미 도는 미터의 상태(/api/view 응답). 없으면 None. 시스템 프록시는 거치지 않는다."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(f"http://127.0.0.1:{port}/api/view?list=1", timeout=2) as response:
@@ -3102,7 +3331,6 @@ def running_meter(port):
 
 
 def take_over(port):
-    """읽기가 막혀 멈춘 미터를 물러나게 하고 포트가 빌 때까지 기다린다. 넘겨받았으면 True."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(urllib.request.Request(f"http://127.0.0.1:{port}/api/quit", data=b"", method="POST"), timeout=2) as response:
@@ -3118,13 +3346,11 @@ def take_over(port):
 
 
 def reopen_window(port):
-    """이미 도는 미터의 창을 띄운다. 프로그램을 또 켜면 같은 전투가 두 번 저장되기 때문이다."""
     if not set_topmost(True) and open_window(f"http://127.0.0.1:{port}/"):
         pin_window()
 
 
 def check():
-    """지금 메모리의 전투 상태를 한 번 읽어 출력한다."""
     pid = find_pid()
     if not pid:
         raise SystemExit("게임이 실행 중이 아닙니다.")
@@ -3215,7 +3441,7 @@ def check_battle(reader, names, ctx):
 
 
 class MeterServer(ThreadingHTTPServer):
-    allow_reuse_address = False  # 켜 두면 Windows 에서 두 프로세스가 같은 포트를 함께 잡아 충돌을 알 수 없다.
+    allow_reuse_address = False
 
 
 def serve(port, window, reuse_window=False):
@@ -3227,13 +3453,8 @@ def serve(port, window, reuse_window=False):
     url = f"http://127.0.0.1:{PORT[0]}/"
     threading.Thread(target=METER.run, daemon=True).start()
     print(url, flush=True)
-    # 멈춘 미터를 넘겨받았으면 그 미터가 띄운 창이 같은 주소로 남아 있다: 있으면 그대로 쓴다.
     if window and ((reuse_window and set_topmost(True)) or open_window(url)):
         def watchdog():
-            """창을 닫으면 미터도 끈다 (2026-11-23 — 그 전엔 화면 요청이 3분 끊겨야 꺼졌다).
-
-            창이 한 번 뜬 뒤 안 보이는 것이 이어지면 끈다. 기록 중인 전투가 있으면 끝나서 저장될 때까지 기다린다.
-            창을 못 찾는 경우(제목이 다른 브라우저 탭)는 예전처럼 화면 요청이 3분 끊기면 끈다."""
             seen, gone, idle = False, 0, 0
             while True:
                 time.sleep(WINDOW_CHECK_SECONDS)
@@ -3257,18 +3478,17 @@ def main():
     ap.add_argument("--no-window", action="store_true")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
-    ap.add_argument("--upload-url", help=f"서버 전송 주소 (기본: upload.json, 없으면 {DEFAULT_UPLOAD_URL})")
+    ap.add_argument("--upload-url", help=f"서버 전송 주소 (기본 {DEFAULT_UPLOAD_URL})")
     ap.add_argument("--upload-key", help="서버 전송 때 X-Meter-Key 로 보낼 값 (기록 받는 서버의 --key)")
     args = ap.parse_args()
     try:
-        UPLOAD.update({k: str(v) for k, v in json.loads(UPLOAD_CONFIG.read_text(encoding="utf-8")).items() if k in UPLOAD and v})
-    except (OSError, ValueError, AttributeError):
-        pass  # upload.json 이 없으면 기본값
+        UPLOAD.update({k: str(v) for k, v in json.loads(read_data("data/upload.json")).items() if k in UPLOAD and v})
+    except (OSError, ValueError, AttributeError, zlib.error):
+        pass
     UPLOAD.update({k: v for k, v in (("url", args.upload_url), ("key", args.upload_key)) if v})
     if args.check:
         return check()
     running = None if args.no_window else running_meter(args.port)
-    # 이미 도는 미터가 있으면 창만 다시 연다. 다만 읽기가 막혀 멈춘 미터라면(게임이 관리자 권한) 물러나게 하고 이 미터가 넘겨받는다.
     taken = bool(running and running.get("halted")) and take_over(args.port)
     if running and not taken:
         return reopen_window(args.port)
