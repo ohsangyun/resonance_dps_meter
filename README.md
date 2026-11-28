@@ -21,5 +21,5 @@
 
 ## 바이러스 검사
 
-- [VirusTotal 검사 결과](https://www.virustotal.com/gui/file/60a9d4b827b5993c82eccff0dfd1686d1b3b1b089d5dde6875b5fecc54425d91?nocache=1)
+- [VirusTotal 검사 결과](https://www.virustotal.com/gui/file-analysis/Yzc4YWZkNDVmNTUyOTY0Y2UzMGMwODM5ZjlmNTljYmY6MTc5NTgzMTY3MQ==)
 - zip 파일의 SHA-256: `60a9d4b827b5993c82eccff0dfd1686d1b3b1b089d5dde6875b5fecc54425d91`
